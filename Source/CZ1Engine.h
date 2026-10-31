@@ -53,12 +53,20 @@ public:
         void reset();
     };
 
+    struct VoicePairDef
+    {
+        int chipIndex = 0; // 0 or 1
+        int v1 = 2;        // Line 1 voice
+        int v2 = 7;        // Line 2 voice
+    };
+
     struct NoteVoice
     {
         int  midiNote = -1;
         int  velocity = 0;
         bool active = false;
         int  pairIndex = 0;
+        int  chipIndex = 0;
         int  v1 = 2;
         int  v2 = 7;
 
@@ -66,6 +74,7 @@ public:
         int  dcwStage = 0;
         int  dcoStage = 0;
         bool isReleased = false;
+        uint64_t noteOnCounter = 0;
     };
 
     struct Upd933Chip
@@ -110,6 +119,7 @@ private:
 
     void initTables();
     void processEnvelopeSequencer();
+    int  findVoiceToAllocate(int midiNote);
 
     uint16_t cosineTable[0x800] = {0};
     uint32_t pitchTable[0x80] = {0};
@@ -119,15 +129,28 @@ private:
     Upd933Chip chip0;
     Upd933Chip chip1;
 
-    static constexpr int NUM_VOICE_PAIRS = 4;
-    const std::pair<int, int> voicePairs[NUM_VOICE_PAIRS] = {
-        {2, 7}, // Primary dual-line pair from MAME CZ-1 log
-        {0, 5},
-        {1, 4},
-        {3, 6}
+    static constexpr int NUM_VOICE_PAIRS = 8;
+    const VoicePairDef voicePairs[NUM_VOICE_PAIRS] = {
+        // Chip 0: 4 dual-line voice pairs
+        {0, 2, 7},
+        {0, 0, 5},
+        {0, 1, 4},
+        {0, 3, 6},
+        // Chip 1: 4 dual-line voice pairs
+        {1, 2, 7},
+        {1, 0, 5},
+        {1, 1, 4},
+        {1, 3, 6}
     };
 
     std::array<NoteVoice, NUM_VOICE_PAIRS> allocatedVoices;
+    uint64_t globalNoteCounter = 0;
 
     bool chorusEnabled = true;
+
+    // Stereo chorus delay line
+    static constexpr int CHORUS_BUF_SIZE = 1024;
+    float chorusBuffer[CHORUS_BUF_SIZE] = {0.0f};
+    int   chorusWritePos = 0;
+    float chorusPhase = 0.0f;
 };

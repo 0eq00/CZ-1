@@ -351,32 +351,73 @@ void CZ1Engine::reset()
     }
 }
 
-void CZ1Engine::noteOn(int midiNote, int velocity)
+int CZ1Engine::findVoiceToAllocate(int midiNote)
 {
-    // Find free voice pair
-    int freeIdx = -1;
+    // 1. Priority: If a voice is already assigned to this exact note (even if releasing), re-trigger it!
+    for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
+    {
+        if (allocatedVoices[i].active && allocatedVoices[i].midiNote == midiNote)
+            return i;
+    }
+
+    // 2. Priority: Find an idle (completely inactive) voice
     for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
     {
         if (!allocatedVoices[i].active)
+            return i;
+    }
+
+    // 3. Priority: Steal a releasing voice with the lowest current DCA volume
+    int bestReleasingIdx = -1;
+    uint32_t lowestDcaLevel = 0xffffffff;
+    for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
+    {
+        if (allocatedVoices[i].isReleased)
         {
-            freeIdx = i;
-            break;
+            const auto& voice = allocatedVoices[i];
+            Upd933Chip& chip = (voice.chipIndex == 0) ? chip0 : chip1;
+            uint32_t curLevel = chip.dca[voice.v1].current;
+            if (curLevel < lowestDcaLevel)
+            {
+                lowestDcaLevel = curLevel;
+                bestReleasingIdx = i;
+            }
         }
     }
-    if (freeIdx == -1)
-        freeIdx = 0; // Steal oldest
+    if (bestReleasingIdx != -1)
+        return bestReleasingIdx;
 
-    NoteVoice& voice = allocatedVoices[freeIdx];
+    // 4. Priority: If all voices are held and active, steal the oldest voice (LRU)
+    int oldestIdx = 0;
+    uint64_t oldestTime = 0xffffffffffffffffULL;
+    for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
+    {
+        if (allocatedVoices[i].noteOnCounter < oldestTime)
+        {
+            oldestTime = allocatedVoices[i].noteOnCounter;
+            oldestIdx = i;
+        }
+    }
+    return oldestIdx;
+}
+
+void CZ1Engine::noteOn(int midiNote, int velocity)
+{
+    const int idx = findVoiceToAllocate(midiNote);
+    NoteVoice& voice = allocatedVoices[idx];
+
     voice.midiNote = midiNote;
     voice.velocity = velocity;
     voice.active = true;
-    voice.pairIndex = freeIdx;
-    voice.v1 = voicePairs[freeIdx].first;
-    voice.v2 = voicePairs[freeIdx].second;
+    voice.pairIndex = idx;
+    voice.chipIndex = voicePairs[idx].chipIndex;
+    voice.v1 = voicePairs[idx].v1;
+    voice.v2 = voicePairs[idx].v2;
     voice.dcaStage = 0;
     voice.dcwStage = 0;
     voice.dcoStage = 0;
     voice.isReleased = false;
+    voice.noteOnCounter = ++globalNoteCounter;
 
     // Pitch determination (chromatic tracking from key 60 log baseline):
     // Key 60 log baseline: V2=0x51d8 (~40.92 semi), V7=0x5200 (41.00 semi)
@@ -386,73 +427,57 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
 
     const int v1 = voice.v1;
     const int v2 = voice.v2;
+    Upd933Chip& chip = (voice.chipIndex == 0) ? chip0 : chip1;
 
-    chip0.writeReg(0x60 + v1, pitchV1);
-    chip1.writeReg(0x60 + v1, pitchV1);
-    chip0.writeReg(0x60 + v2, pitchV2);
-    chip1.writeReg(0x60 + v2, pitchV2);
+    chip.writeReg(0x60 + v1, pitchV1);
+    chip.writeReg(0x60 + v2, pitchV2);
 
-    chip0.updatePitchStep(v1, pitchTable, pitchFine);
-    chip1.updatePitchStep(v1, pitchTable, pitchFine);
-    chip0.updatePitchStep(v2, pitchTable, pitchFine);
-    chip1.updatePitchStep(v2, pitchTable, pitchFine);
+    chip.updatePitchStep(v1, pitchTable, pitchFine);
+    chip.updatePitchStep(v2, pitchTable, pitchFine);
 
     // Reset phase counters (0x0000 and 0x0080 from log)
-    chip0.writeReg(0x98 + v1, 0x0000);
-    chip1.writeReg(0x98 + v1, 0x0000);
-    chip0.writeReg(0x98 + v2, 0x0080);
-    chip1.writeReg(0x98 + v2, 0x0080);
+    chip.writeReg(0x98 + v1, 0x0000);
+    chip.writeReg(0x98 + v2, 0x0080);
 
     // Step 1: DCA Attack (dir=0, rate=99, sus=0, target=123) -> 0x637b
-    chip0.writeReg(0x00 + v1, 0x637b);
-    chip1.writeReg(0x00 + v1, 0x637b);
-    chip0.writeReg(0x00 + v2, 0x637b);
-    chip1.writeReg(0x00 + v2, 0x637b);
+    chip.writeReg(0x00 + v1, 0x637b);
+    chip.writeReg(0x00 + v2, 0x637b);
 
     // Step 1: DCW Attack (dir=0, rate=98, sus=0, target=112) -> 0x6270
-    chip0.writeReg(0x20 + v1, 0x6270);
-    chip1.writeReg(0x20 + v1, 0x6270);
-    chip0.writeReg(0x20 + v2, 0x6270);
-    chip1.writeReg(0x20 + v2, 0x6270);
+    chip.writeReg(0x20 + v1, 0x6270);
+    chip.writeReg(0x20 + v2, 0x6270);
 
     // Step 1: DCO Attack (dir=0, rate=93, sus=0, target=29) -> 0x5d1d
-    chip0.writeReg(0x10 + v1, 0x5d1d);
-    chip1.writeReg(0x10 + v1, 0x5d1d);
-    chip0.writeReg(0x10 + v2, 0x5d1d);
-    chip1.writeReg(0x10 + v2, 0x5d1d);
+    chip.writeReg(0x10 + v1, 0x5d1d);
+    chip.writeReg(0x10 + v2, 0x5d1d);
 }
 
 void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
 {
     for (auto& v : allocatedVoices)
     {
-        if (v.active && v.midiNote == midiNote)
+        if (v.active && v.midiNote == midiNote && !v.isReleased)
         {
             v.isReleased = true;
             const int v1 = v.v1;
             const int v2 = v.v2;
+            Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
 
             // Step 1 of release from log:
             // DCA: 0xcd67 (dir=1, rate=77, sus=0, target=103)
             v.dcaStage = 2;
-            chip0.writeReg(0x00 + v1, 0xcd67);
-            chip1.writeReg(0x00 + v1, 0xcd67);
-            chip0.writeReg(0x00 + v2, 0xcd67);
-            chip1.writeReg(0x00 + v2, 0xcd67);
+            chip.writeReg(0x00 + v1, 0xcd67);
+            chip.writeReg(0x00 + v2, 0xcd67);
 
             // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
             v.dcwStage = 3;
-            chip0.writeReg(0x20 + v1, 0xa780);
-            chip1.writeReg(0x20 + v1, 0xa780);
-            chip0.writeReg(0x20 + v2, 0xa780);
-            chip1.writeReg(0x20 + v2, 0xa780);
+            chip.writeReg(0x20 + v1, 0xa780);
+            chip.writeReg(0x20 + v2, 0xa780);
 
             // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
             v.dcoStage = 2;
-            chip0.writeReg(0x10 + v1, 0xd780);
-            chip1.writeReg(0x10 + v1, 0xd780);
-            chip0.writeReg(0x10 + v2, 0xd780);
-            chip1.writeReg(0x10 + v2, 0xd780);
+            chip.writeReg(0x10 + v1, 0xd780);
+            chip.writeReg(0x10 + v2, 0xd780);
         }
     }
 }
@@ -484,82 +509,72 @@ void CZ1Engine::processEnvelopeSequencer()
 
         const int v1 = v.v1;
         const int v2 = v.v2;
+        Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
 
         // DCA envelope sequencer
         if (v.dcaStage == 0) // Attack -> Decay/Sustain
         {
-            if (chip0.dca[v1].current >= chip0.dca[v1].target)
+            if (chip.dca[v1].current >= chip.dca[v1].target)
             {
                 v.dcaStage = 1;
                 // Step 2: 0xe9fa (dir=1, rate=105, sus=1, target=122)
-                chip0.writeReg(0x00 + v1, 0xe9fa);
-                chip1.writeReg(0x00 + v1, 0xe9fa);
-                chip0.writeReg(0x00 + v2, 0xe9fa);
-                chip1.writeReg(0x00 + v2, 0xe9fa);
+                chip.writeReg(0x00 + v1, 0xe9fa);
+                chip.writeReg(0x00 + v2, 0xe9fa);
             }
         }
         else if (v.dcaStage == 2) // Rel 1 -> Rel 2
         {
-            if (chip0.dca[v1].current <= chip0.dca[v1].target)
+            if (chip.dca[v1].current <= chip.dca[v1].target)
             {
                 v.dcaStage = 3;
                 // Release 2: 0xc300 (dir=1, rate=67, sus=0, target=0)
-                chip0.writeReg(0x00 + v1, 0xc300);
-                chip1.writeReg(0x00 + v1, 0xc300);
-                chip0.writeReg(0x00 + v2, 0xc300);
-                chip1.writeReg(0x00 + v2, 0xc300);
+                chip.writeReg(0x00 + v1, 0xc300);
+                chip.writeReg(0x00 + v2, 0xc300);
             }
         }
         else if (v.dcaStage == 3) // Rel 2 -> Idle
         {
-            if (chip0.dca[v1].current <= 0)
+            if (chip.dca[v1].current <= 0)
             {
                 v.dcaStage = 4;
                 v.active = false;
-                chip0.writeReg(0x00 + v1, 0xff80);
-                chip1.writeReg(0x00 + v1, 0xff80);
-                chip0.writeReg(0x00 + v2, 0xff80);
-                chip1.writeReg(0x00 + v2, 0xff80);
+                v.isReleased = false;
+                chip.writeReg(0x00 + v1, 0xff80);
+                chip.writeReg(0x00 + v2, 0xff80);
             }
         }
 
         // DCW envelope sequencer
         if (v.dcwStage == 0) // Attack -> Decay 1
         {
-            if (chip0.dcw[v1].current >= chip0.dcw[v1].target)
+            if (chip.dcw[v1].current >= chip.dcw[v1].target)
             {
                 v.dcwStage = 1;
                 // Decay 1: 0xb84f (dir=1, rate=56, sus=0, target=79)
-                chip0.writeReg(0x20 + v1, 0xb84f);
-                chip1.writeReg(0x20 + v1, 0xb84f);
-                chip0.writeReg(0x20 + v2, 0xb84f);
-                chip1.writeReg(0x20 + v2, 0xb84f);
+                chip.writeReg(0x20 + v1, 0xb84f);
+                chip.writeReg(0x20 + v2, 0xb84f);
             }
         }
         else if (v.dcwStage == 1) // Decay 1 -> Decay 2 / Sustain
         {
-            if (chip0.dcw[v1].current <= chip0.dcw[v1].target)
+            if (chip.dcw[v1].current <= chip.dcw[v1].target)
             {
                 v.dcwStage = 2;
                 // Sustain: 0x34d1 (dir=0, rate=52, sus=1, target=81)
-                chip0.writeReg(0x20 + v1, 0x34d1);
-                chip1.writeReg(0x20 + v1, 0x34d1);
-                chip0.writeReg(0x20 + v2, 0x34d1);
-                chip1.writeReg(0x20 + v2, 0x34d1);
+                chip.writeReg(0x20 + v1, 0x34d1);
+                chip.writeReg(0x20 + v2, 0x34d1);
             }
         }
 
         // DCO envelope sequencer
         if (v.dcoStage == 0) // Attack -> Decay to base
         {
-            if (chip0.dco[v1].current >= chip0.dco[v1].target)
+            if (chip.dco[v1].current >= chip.dco[v1].target)
             {
                 v.dcoStage = 1;
                 // Decay to base: 0xd780 (dir=1, rate=87, sus=1, target=0)
-                chip0.writeReg(0x10 + v1, 0xd780);
-                chip1.writeReg(0x10 + v1, 0xd780);
-                chip0.writeReg(0x10 + v2, 0xd780);
-                chip1.writeReg(0x10 + v2, 0xd780);
+                chip.writeReg(0x10 + v1, 0xd780);
+                chip.writeReg(0x10 + v2, 0xd780);
             }
         }
     }
@@ -575,14 +590,34 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
     const float f0 = static_cast<float>(raw0) / 32768.0f;
     const float f1 = static_cast<float>(raw1) / 32768.0f;
 
+    const float mono = (f0 + f1) * 0.5f;
+
     if (chorusEnabled)
     {
-        outLeft  = f0 * 0.85f + f1 * 0.15f;
-        outRight = f0 * 0.15f + f1 * 0.85f;
+        // Smooth authentic BBD/analog chorus emulation
+        chorusPhase += 0.00018f; // ~0.7 Hz LFO
+        if (chorusPhase > 2.0f * static_cast<float>(M_PI))
+            chorusPhase -= 2.0f * static_cast<float>(M_PI);
+
+        chorusBuffer[chorusWritePos] = mono;
+
+        const float modL = 140.0f + 40.0f * std::sin(chorusPhase);
+        const float modR = 140.0f + 40.0f * std::sin(chorusPhase + static_cast<float>(M_PI));
+
+        const int readIdxL = (chorusWritePos - static_cast<int>(modL) + CHORUS_BUF_SIZE) % CHORUS_BUF_SIZE;
+        const int readIdxR = (chorusWritePos - static_cast<int>(modR) + CHORUS_BUF_SIZE) % CHORUS_BUF_SIZE;
+
+        const float dL = chorusBuffer[readIdxL];
+        const float dR = chorusBuffer[readIdxR];
+
+        chorusWritePos = (chorusWritePos + 1) % CHORUS_BUF_SIZE;
+
+        outLeft  = mono * 0.72f + dL * 0.42f;
+        outRight = mono * 0.72f + dR * 0.42f;
     }
     else
     {
-        outLeft  = f0;
-        outRight = f1;
+        outLeft  = mono;
+        outRight = mono;
     }
 }
