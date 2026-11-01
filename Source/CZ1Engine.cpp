@@ -351,6 +351,49 @@ void CZ1Engine::reset()
     }
 }
 
+int CZ1Engine::getKeyRateOffset(int midiNote)
+{
+    // Authentic Casio CZ-1 Key Follow rate offsets across 88 keys
+    // Base rate is calibrated around Middle C (MIDI Key 60)
+    static constexpr int8_t OFFSET_TABLE[128] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        0, 0, 0, 0, 0, 0,
+        1, 1, 1, 1, 1,
+        2, 2,
+        3, 3, 3, 3,
+        4, 4,
+        5, 5,
+        6, 6,
+        7, 7,
+        8,
+        9, 9,
+        10,
+        11, 11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        19,
+        20,
+        21,
+        23,
+        24,
+        26,
+        27,
+        28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
+        28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
+        28, 28, 28, 28, 28, 28
+    };
+
+    if (midiNote < 0) return -1;
+    if (midiNote > 127) return 28;
+    return OFFSET_TABLE[midiNote];
+}
+
 int CZ1Engine::findVoiceToAllocate(int midiNote)
 {
     // 1. Priority: If a voice is already assigned to this exact note (even if releasing), re-trigger it!
@@ -419,6 +462,9 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     voice.isReleased = false;
     voice.noteOnCounter = ++globalNoteCounter;
 
+    const int kOffset = getKeyRateOffset(midiNote);
+    voice.keyRateOffset = kOffset;
+
     // Pitch determination (chromatic tracking from key 60 log baseline):
     // Key 60 log baseline: V2=0x51d8 (~40.92 semi), V7=0x5200 (41.00 semi)
     const int shift = (midiNote - 60) * 512;
@@ -435,21 +481,27 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     chip.updatePitchStep(v1, pitchTable, pitchFine);
     chip.updatePitchStep(v2, pitchTable, pitchFine);
 
-    // Reset phase counters (0x0000 and 0x0080 from log)
+    // Reset phase counters (0x0000 for Line 1, 0x0080 for Line 2 from log)
     chip.writeReg(0x98 + v1, 0x0000);
     chip.writeReg(0x98 + v2, 0x0080);
 
-    // Step 1: DCA Attack (dir=0, rate=99, sus=0, target=123) -> 0x637b
-    chip.writeReg(0x00 + v1, 0x637b);
-    chip.writeReg(0x00 + v2, 0x637b);
+    // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target=123)
+    const uint8_t dcaAttackRate = static_cast<uint8_t>(std::clamp(99 + kOffset, 0, 127));
+    const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | 123);
+    chip.writeReg(0x00 + v1, dcaAttackWord);
+    chip.writeReg(0x00 + v2, dcaAttackWord);
 
-    // Step 1: DCW Attack (dir=0, rate=98, sus=0, target=112) -> 0x6270
-    chip.writeReg(0x20 + v1, 0x6270);
-    chip.writeReg(0x20 + v2, 0x6270);
+    // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target=112)
+    const uint8_t dcwAttackRate = static_cast<uint8_t>(std::clamp(98 + kOffset, 0, 127));
+    const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | 112);
+    chip.writeReg(0x20 + v1, dcwAttackWord);
+    chip.writeReg(0x20 + v2, dcwAttackWord);
 
-    // Step 1: DCO Attack (dir=0, rate=93, sus=0, target=29) -> 0x5d1d
-    chip.writeReg(0x10 + v1, 0x5d1d);
-    chip.writeReg(0x10 + v2, 0x5d1d);
+    // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target=29)
+    const uint8_t dcoAttackRate = static_cast<uint8_t>(std::clamp(93 + kOffset, 0, 127));
+    const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | 29);
+    chip.writeReg(0x10 + v1, dcoAttackWord);
+    chip.writeReg(0x10 + v2, dcoAttackWord);
 }
 
 void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
@@ -462,12 +514,15 @@ void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
             const int v1 = v.v1;
             const int v2 = v.v2;
             Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
+            const int kOffset = v.keyRateOffset;
 
             // Step 1 of release from log:
-            // DCA: 0xcd67 (dir=1, rate=77, sus=0, target=103)
+            // DCA: dir=1, rate=77+kOffset, sus=0, target=103
             v.dcaStage = 2;
-            chip.writeReg(0x00 + v1, 0xcd67);
-            chip.writeReg(0x00 + v2, 0xcd67);
+            const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
+            const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | 103);
+            chip.writeReg(0x00 + v1, dcaRel1Word);
+            chip.writeReg(0x00 + v2, dcaRel1Word);
 
             // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
             v.dcwStage = 3;
@@ -510,6 +565,7 @@ void CZ1Engine::processEnvelopeSequencer()
         const int v1 = v.v1;
         const int v2 = v.v2;
         Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
+        const int kOffset = v.keyRateOffset;
 
         // DCA envelope sequencer
         if (v.dcaStage == 0) // Attack -> Decay/Sustain
@@ -517,9 +573,11 @@ void CZ1Engine::processEnvelopeSequencer()
             if (chip.dca[v1].current >= chip.dca[v1].target)
             {
                 v.dcaStage = 1;
-                // Step 2: 0xe9fa (dir=1, rate=105, sus=1, target=122)
-                chip.writeReg(0x00 + v1, 0xe9fa);
-                chip.writeReg(0x00 + v2, 0xe9fa);
+                // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target=122)
+                const uint8_t dcaDecayRate = static_cast<uint8_t>(std::clamp(105 + kOffset, 0, 127));
+                const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | 122);
+                chip.writeReg(0x00 + v1, dcaDecayWord);
+                chip.writeReg(0x00 + v2, dcaDecayWord);
             }
         }
         else if (v.dcaStage == 2) // Rel 1 -> Rel 2
@@ -527,9 +585,11 @@ void CZ1Engine::processEnvelopeSequencer()
             if (chip.dca[v1].current <= chip.dca[v1].target)
             {
                 v.dcaStage = 3;
-                // Release 2: 0xc300 (dir=1, rate=67, sus=0, target=0)
-                chip.writeReg(0x00 + v1, 0xc300);
-                chip.writeReg(0x00 + v2, 0xc300);
+                // Release 2: dir=1, rate=67+kOffset, sus=0, target=0
+                const uint8_t dcaRel2Rate = static_cast<uint8_t>(std::clamp(67 + kOffset, 0, 127));
+                const uint16_t dcaRel2Word = static_cast<uint16_t>((1 << 15) | (dcaRel2Rate << 8) | 0);
+                chip.writeReg(0x00 + v1, dcaRel2Word);
+                chip.writeReg(0x00 + v2, dcaRel2Word);
             }
         }
         else if (v.dcaStage == 3) // Rel 2 -> Idle

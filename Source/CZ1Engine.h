@@ -74,6 +74,7 @@ public:
         int  dcwStage = 0;
         int  dcoStage = 0;
         bool isReleased = false;
+        int  keyRateOffset = 0;
         uint64_t noteOnCounter = 0;
     };
 
@@ -117,6 +118,8 @@ private:
         return static_cast<uint32_t>((8 | (data & 7)) << (data >> 3));
     }
 
+    static int getKeyRateOffset(int midiNote);
+
     void initTables();
     void processEnvelopeSequencer();
     int  findVoiceToAllocate(int midiNote);
@@ -131,16 +134,16 @@ private:
 
     static constexpr int NUM_VOICE_PAIRS = 8;
     const VoicePairDef voicePairs[NUM_VOICE_PAIRS] = {
-        // Chip 0: 4 dual-line voice pairs
-        {0, 2, 7},
-        {0, 0, 5},
-        {0, 1, 4},
-        {0, 3, 6},
+        // Chip 0: 4 dual-line voice pairs (Line 1: even, Line 2: odd)
+        {0, 2, 7}, // Pair 0
+        {0, 4, 1}, // Pair 1
+        {0, 6, 3}, // Pair 2
+        {0, 0, 5}, // Pair 3
         // Chip 1: 4 dual-line voice pairs
-        {1, 2, 7},
-        {1, 0, 5},
-        {1, 1, 4},
-        {1, 3, 6}
+        {1, 2, 7}, // Pair 4
+        {1, 4, 1}, // Pair 5
+        {1, 6, 3}, // Pair 6
+        {1, 0, 5}  // Pair 7
     };
 
     std::array<NoteVoice, NUM_VOICE_PAIRS> allocatedVoices;
