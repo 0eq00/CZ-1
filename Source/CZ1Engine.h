@@ -119,6 +119,12 @@ private:
     }
 
     static int getKeyRateOffset(int midiNote);
+    static uint8_t getDcaAttackTarget(int velocity);
+    static uint8_t getDcaSustainTarget(int velocity);
+    static uint8_t getDcaRelease1Target(int velocity);
+    static uint8_t getDcwAttackTarget(int velocity);
+    static uint8_t getDcwDecay1Target(int velocity);
+    static uint8_t getDcoAttackTarget(int velocity);
 
     void initTables();
     void processEnvelopeSequencer();

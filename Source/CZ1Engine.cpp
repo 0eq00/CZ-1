@@ -394,6 +394,112 @@ int CZ1Engine::getKeyRateOffset(int midiNote)
     return OFFSET_TABLE[midiNote];
 }
 
+uint8_t CZ1Engine::getDcaAttackTarget(int velocity)
+{
+    const int v = std::clamp(velocity, 0, 127);
+    if (v <= 28) return 117;
+    if (v <= 41) return 118;
+    if (v <= 48) return 119;
+    if (v <= 55) return 120;
+    if (v <= 65) return 121;
+    if (v <= 73) return 122;
+    if (v <= 81) return 123;
+    if (v <= 87) return 124;
+    if (v <= 95) return 125;
+    if (v <= 101) return 126;
+    return 127;
+}
+
+uint8_t CZ1Engine::getDcaSustainTarget(int velocity)
+{
+    return getDcaAttackTarget(velocity) - 1;
+}
+
+uint8_t CZ1Engine::getDcaRelease1Target(int velocity)
+{
+    return getDcaAttackTarget(velocity) - 20;
+}
+
+uint8_t CZ1Engine::getDcwAttackTarget(int velocity)
+{
+    const int v = std::clamp(velocity, 0, 127);
+    if (v <= 29) return 88;
+    if (v <= 32) return 89;
+    if (v <= 36) return 90;
+    if (v <= 40) return 91;
+    if (v <= 42) return 92;
+    if (v <= 44) return 93;
+    if (v <= 45) return 94;
+    if (v <= 47) return 95;
+    if (v <= 49) return 96;
+    if (v <= 50) return 97;
+    if (v <= 51) return 98;
+    if (v <= 53) return 99;
+    if (v <= 55) return 100;
+    if (v <= 59) return 101;
+    if (v <= 61) return 102;
+    if (v <= 63) return 103;
+    if (v <= 67) return 104;
+    if (v <= 69) return 105;
+    if (v <= 71) return 106;
+    if (v <= 73) return 107;
+    if (v <= 75) return 108;
+    if (v <= 77) return 109;
+    if (v <= 79) return 111;
+    if (v <= 81) return 112;
+    if (v <= 83) return 113;
+    if (v <= 85) return 114;
+    if (v <= 87) return 115;
+    if (v <= 89) return 116;
+    if (v <= 91) return 117;
+    if (v <= 93) return 118;
+    if (v <= 95) return 120;
+    if (v <= 97) return 121;
+    if (v <= 99) return 122;
+    if (v <= 101) return 123;
+    return 127;
+}
+
+uint8_t CZ1Engine::getDcwDecay1Target(int velocity)
+{
+    return getDcwAttackTarget(velocity) - 33;
+}
+
+uint8_t CZ1Engine::getDcoAttackTarget(int velocity)
+{
+    const int v = std::clamp(velocity, 0, 127);
+    if (v <= 28) return 3;
+    if (v <= 29) return 4;
+    if (v <= 32) return 5;
+    if (v <= 34) return 6;
+    if (v <= 36) return 7;
+    if (v <= 40) return 8;
+    if (v <= 41) return 9;
+    if (v <= 42) return 10;
+    if (v <= 44) return 11;
+    if (v <= 45) return 12;
+    if (v <= 46) return 13;
+    if (v <= 48) return 14;
+    if (v <= 49) return 15;
+    if (v <= 50) return 16;
+    if (v <= 52) return 17;
+    if (v <= 53) return 18;
+    if (v <= 55) return 19;
+    if (v <= 59) return 20;
+    if (v <= 61) return 21;
+    if (v <= 63) return 22;
+    if (v <= 67) return 23;
+    if (v <= 69) return 24;
+    if (v <= 71) return 25;
+    if (v <= 75) return 26;
+    if (v <= 77) return 27;
+    if (v <= 81) return 29;
+    if (v <= 83) return 30;
+    if (v <= 85) return 31;
+    if (v <= 89) return 32;
+    return 33;
+}
+
 int CZ1Engine::findVoiceToAllocate(int midiNote)
 {
     // 1. Priority: If a voice is already assigned to this exact note (even if releasing), re-trigger it!
@@ -449,8 +555,9 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     const int idx = findVoiceToAllocate(midiNote);
     NoteVoice& voice = allocatedVoices[idx];
 
+    const int vel = std::clamp(velocity, 1, 127);
     voice.midiNote = midiNote;
-    voice.velocity = velocity;
+    voice.velocity = vel;
     voice.active = true;
     voice.pairIndex = idx;
     voice.chipIndex = voicePairs[idx].chipIndex;
@@ -485,21 +592,24 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     chip.writeReg(0x98 + v1, 0x0000);
     chip.writeReg(0x98 + v2, 0x0080);
 
-    // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target=123)
+    // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target from velocity calibration: 117..127)
+    const uint8_t dcaAttackTarget = getDcaAttackTarget(vel);
     const uint8_t dcaAttackRate = static_cast<uint8_t>(std::clamp(99 + kOffset, 0, 127));
-    const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | 123);
+    const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | dcaAttackTarget);
     chip.writeReg(0x00 + v1, dcaAttackWord);
     chip.writeReg(0x00 + v2, dcaAttackWord);
 
-    // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target=112)
+    // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target from velocity calibration: 88..127)
+    const uint8_t dcwAttackTarget = getDcwAttackTarget(vel);
     const uint8_t dcwAttackRate = static_cast<uint8_t>(std::clamp(98 + kOffset, 0, 127));
-    const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | 112);
+    const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | dcwAttackTarget);
     chip.writeReg(0x20 + v1, dcwAttackWord);
     chip.writeReg(0x20 + v2, dcwAttackWord);
 
-    // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target=29)
+    // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target from velocity calibration: 3..33)
+    const uint8_t dcoAttackTarget = getDcoAttackTarget(vel);
     const uint8_t dcoAttackRate = static_cast<uint8_t>(std::clamp(93 + kOffset, 0, 127));
-    const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | 29);
+    const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | dcoAttackTarget);
     chip.writeReg(0x10 + v1, dcoAttackWord);
     chip.writeReg(0x10 + v2, dcoAttackWord);
 }
@@ -517,10 +627,11 @@ void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
             const int kOffset = v.keyRateOffset;
 
             // Step 1 of release from log:
-            // DCA: dir=1, rate=77+kOffset, sus=0, target=103
+            // DCA: dir=1, rate=77+kOffset, sus=0, target from velocity table (97..107)
             v.dcaStage = 2;
+            const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
             const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
-            const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | 103);
+            const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
             chip.writeReg(0x00 + v1, dcaRel1Word);
             chip.writeReg(0x00 + v2, dcaRel1Word);
 
@@ -573,9 +684,10 @@ void CZ1Engine::processEnvelopeSequencer()
             if (chip.dca[v1].current >= chip.dca[v1].target)
             {
                 v.dcaStage = 1;
-                // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target=122)
+                // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target from velocity: 116..126)
+                const uint8_t dcaDecayTarget = getDcaSustainTarget(v.velocity);
                 const uint8_t dcaDecayRate = static_cast<uint8_t>(std::clamp(105 + kOffset, 0, 127));
-                const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | 122);
+                const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | dcaDecayTarget);
                 chip.writeReg(0x00 + v1, dcaDecayWord);
                 chip.writeReg(0x00 + v2, dcaDecayWord);
             }
@@ -610,9 +722,11 @@ void CZ1Engine::processEnvelopeSequencer()
             if (chip.dcw[v1].current >= chip.dcw[v1].target)
             {
                 v.dcwStage = 1;
-                // Decay 1: 0xb84f (dir=1, rate=56, sus=0, target=79)
-                chip.writeReg(0x20 + v1, 0xb84f);
-                chip.writeReg(0x20 + v2, 0xb84f);
+                // Decay 1: dir=1, rate=56, sus=0, target from velocity (55..94)
+                const uint8_t dcwDecayTarget = getDcwDecay1Target(v.velocity);
+                const uint16_t dcwDecayWord = static_cast<uint16_t>((1 << 15) | (56 << 8) | dcwDecayTarget);
+                chip.writeReg(0x20 + v1, dcwDecayWord);
+                chip.writeReg(0x20 + v2, dcwDecayWord);
             }
         }
         else if (v.dcwStage == 1) // Decay 1 -> Decay 2 / Sustain
