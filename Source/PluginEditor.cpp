@@ -26,6 +26,31 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     chorusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         p.getVTS(), "chorus", chorusButton);
 
+    // Preset Selector Dropdown
+    presetLabel.setText ("PRESET TONE (64 ORIGINAL PATCHES)", juce::dontSendNotification);
+    presetLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    presetLabel.setColour (juce::Label::textColourId, juce::Colour (0xff00e5ff));
+    addAndMakeVisible (presetLabel);
+
+    for (int i = 0; i < CZ1Engine::NUM_PRESETS; ++i)
+    {
+        presetSelector.addItem (juce::String (p.getEngine().getPresetSlot (i)) + "  " + p.getEngine().getPresetName (i), i + 1);
+    }
+    presetSelector.setSelectedId (p.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetSelector.onChange = [this]()
+    {
+        const int selected = presetSelector.getSelectedItemIndex();
+        if (selected >= 0)
+        {
+            audioProcessor.setCurrentProgram (selected);
+            repaint();
+        }
+    };
+    presetSelector.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff101319));
+    presetSelector.setColour (juce::ComboBox::textColourId, juce::Colours::white);
+    presetSelector.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff00e5ff));
+    addAndMakeVisible (presetSelector);
+
     // Volume Slider
     volumeSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
     volumeSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
@@ -53,7 +78,12 @@ CZ1AudioProcessorEditor::~CZ1AudioProcessorEditor()
 
 void CZ1AudioProcessorEditor::timerCallback()
 {
-    repaint (150, 40, 480, 100); // Repaint LCD region for voice updates
+    const int curProgram = audioProcessor.getCurrentProgram();
+    if (presetSelector.getSelectedItemIndex() != curProgram)
+    {
+        presetSelector.setSelectedId (curProgram + 1, juce::dontSendNotification);
+    }
+    repaint (220, 24, 380, 110); // Repaint LCD region for voice & preset updates
 }
 
 void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
@@ -88,19 +118,26 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
     g.drawRoundedRectangle (lcdArea.toFloat(), 6.0f, 2.0f);
 
     // LCD Glow
+    const int curPreset = audioProcessor.getCurrentProgram();
+    const char* slot = audioProcessor.getEngine().getPresetSlot (curPreset);
+    const char* name = audioProcessor.getEngine().getPresetName (curPreset);
+
     g.setColour (juce::Colour (0xff00e5ff));
     g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 17.0f, juce::Font::bold));
-    g.drawText ("P-01: BRASS 1 (Saw-Pulse)", lcdArea.getX() + 16, lcdArea.getY() + 14, 340, 22, juce::Justification::left);
+    g.drawText (juce::String (slot) + ": " + juce::String (name), lcdArea.getX() + 16, lcdArea.getY() + 14, 340, 22, juce::Justification::left);
 
     g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
-    g.drawText ("LINE: 1+2  |  WAVE: 5+0  |  DETUNE: +0.08st", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
+    if (curPreset == 0)
+        g.drawText ("MAME LOG CALIBRATED  |  AUTHENTIC BRASS 1", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
+    else
+        g.drawText ("PHASE DISTORTION  |  AUTHENTIC MULTI-STAGE ENV", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
 
     const int activeVoices = audioProcessor.getEngine().getActiveVoiceCount();
-    juce::String status = "VOICES: " + juce::String (activeVoices) + " / 8  |  FULL CHROMATIC TRACKING";
+    juce::String status = "VOICES: " + juce::String (activeVoices) + " / 8  |  VELOCITY SENSITIVE";
     g.drawText (status, lcdArea.getX() + 16, lcdArea.getY() + 60, 340, 18, juce::Justification::left);
 
     g.setColour (juce::Colour (0xff80deea));
-    g.drawText ("DAC: 40.0 kHz  |  WINDOWED SINC RESAMPLER", lcdArea.getX() + 16, lcdArea.getY() + 82, 340, 16, juce::Justification::left);
+    g.drawText ("DAC: 40.0 kHz  |  KAISER SINC RESAMPLER", lcdArea.getX() + 16, lcdArea.getY() + 82, 340, 16, juce::Justification::left);
 
     // Control Group Panel
     const juce::Rectangle<int> controlArea (20, 160, getWidth() - 40, 160);
@@ -119,10 +156,13 @@ void CZ1AudioProcessorEditor::resized()
 {
     const int panelY = 160;
 
-    chorusButton.setBounds (40, panelY + 50, 250, 30);
+    presetLabel.setBounds    (40, panelY + 38, 260, 20);
+    presetSelector.setBounds (40, panelY + 62, 260, 32);
 
-    volumeSlider.setBounds (getWidth() - 160, panelY + 30, 80, 80);
-    volumeLabel.setBounds  (getWidth() - 160, panelY + 115, 80, 20);
+    chorusButton.setBounds   (330, panelY + 62, 160, 32);
+
+    volumeSlider.setBounds (getWidth() - 140, panelY + 30, 80, 80);
+    volumeLabel.setBounds  (getWidth() - 140, panelY + 115, 80, 20);
 
     keyboardComponent.setBounds (20, getHeight() - 130, getWidth() - 40, 110);
 }

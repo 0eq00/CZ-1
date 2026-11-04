@@ -88,21 +88,22 @@ double CZ1AudioProcessor::getTailLengthSeconds() const
 
 int CZ1AudioProcessor::getNumPrograms()
 {
-    return 1;
+    return CZ1Engine::NUM_PRESETS;
 }
 
 int CZ1AudioProcessor::getCurrentProgram()
 {
-    return 0;
+    return engine.getCurrentPresetIndex();
 }
 
-void CZ1AudioProcessor::setCurrentProgram (int)
+void CZ1AudioProcessor::setCurrentProgram (int index)
 {
+    engine.loadPreset (index);
 }
 
-const juce::String CZ1AudioProcessor::getProgramName (int)
+const juce::String CZ1AudioProcessor::getProgramName (int index)
 {
-    return "Brass 1 (Initial Preset)";
+    return juce::String(engine.getPresetSlot(index)) + ": " + juce::String(engine.getPresetName(index));
 }
 
 void CZ1AudioProcessor::changeProgramName (int, const juce::String&)
@@ -199,6 +200,10 @@ void CZ1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         else if (msg.isNoteOff())
         {
             engine.noteOff (msg.getNoteNumber(), msg.getVelocity());
+        }
+        else if (msg.isProgramChange())
+        {
+            engine.loadPreset (msg.getProgramChangeNumber());
         }
         else if (msg.isAllNotesOff())
         {

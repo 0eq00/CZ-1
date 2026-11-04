@@ -160,7 +160,7 @@ void CZ1Engine::Upd933Chip::updatePitchStep(int vnum, const uint32_t* pitchTable
     voice.dcwLimit = static_cast<uint16_t>(0x400 - std::min(0x400U, (step >> (PITCH_SHIFT - 2))));
 }
 
-int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable)
+int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
 {
     Voice& voice = voices[vnum];
     int16_t sample = 0;
@@ -260,7 +260,10 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
     if (voice.muteOther)
         sample = static_cast<int16_t>(sample - lastSample);
 
-    // Update envelopes
+    // Update envelopes and pitch modulation
+    const uint32_t oldDco = dco[vnum].current;
+    const int16_t oldPm = voice.pmLevel;
+
     dca[vnum].update();
     dcw[vnum].update();
     dco[vnum].update();
@@ -281,18 +284,21 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
         }
     }
 
+    if (((oldDco ^ dco[vnum].current) >> ENV_DCO_SHIFT) || oldPm != voice.pmLevel)
+        updatePitchStep(vnum, pitchTable, pitchFine);
+
     voice.position += voice.pitchStep;
     lastSample = sample;
     return sample;
 }
 
-int16_t CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable)
+int16_t CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
 {
     int32_t total = 0;
     static const int voiceMap[] = {5, 0, 7, 2, 1, 4, 3, 6};
     for (int v : voiceMap)
     {
-        total += renderVoiceSample(v, cosine, volumeTable);
+        total += renderVoiceSample(v, cosine, volumeTable, pitchTable, pitchFine);
     }
     sampleCount++;
     return static_cast<int16_t>(std::clamp(total, -32768, 32767));
@@ -335,20 +341,161 @@ void CZ1Engine::reset()
     for (auto& v : allocatedVoices)
         v = NoteVoice();
 
-    // Initial preset setup from MAME CZ-1 log:
-    // Wave 5 (Saw-Pulse) for all voices, idle envelopes
-    for (int v = 0; v < 8; ++v)
-    {
-        chip0.writeReg(0x68 + v, 0xa000);
-        chip1.writeReg(0x68 + v, 0xa000);
+    applyPresetWaveforms();
+}
 
-        chip0.writeReg(0x00 + v, 0xff80); // DCA idle
-        chip1.writeReg(0x00 + v, 0xff80);
-        chip0.writeReg(0x20 + v, 0x7f80); // DCW idle
-        chip1.writeReg(0x20 + v, 0x7f80);
-        chip0.writeReg(0x10 + v, 0x7f80); // DCO idle
-        chip1.writeReg(0x10 + v, 0x7f80);
+void CZ1Engine::applyPresetWaveforms()
+{
+    if (currentPresetIndex == 0)
+    {
+        // Initial preset setup from MAME CZ-1 log:
+        // Wave 5 (Saw-Pulse) for all voices, idle envelopes
+        for (int v = 0; v < 8; ++v)
+        {
+            chip0.writeReg(0x68 + v, 0xa000);
+            chip1.writeReg(0x68 + v, 0xa000);
+
+            chip0.writeReg(0x00 + v, 0xff80); // DCA idle
+            chip1.writeReg(0x00 + v, 0xff80);
+            chip0.writeReg(0x20 + v, 0x7f80); // DCW idle
+            chip1.writeReg(0x20 + v, 0x7f80);
+            chip0.writeReg(0x10 + v, 0x7f80); // DCO idle
+            chip1.writeReg(0x10 + v, 0x7f80);
+        }
+        return;
     }
+
+    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const int lineMode = preset.lineMode;
+
+    const uint16_t wordLine1 = preset.lines[0].rawWord;
+    const uint16_t wordLine2 = (lineMode == 2) ? preset.lines[0].rawWord : preset.lines[1].rawWord;
+
+    for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
+    {
+        const int chipIdx = voicePairs[i].chipIndex;
+        const int v1 = voicePairs[i].v1;
+        const int v2 = voicePairs[i].v2;
+        Upd933Chip& chip = (chipIdx == 0) ? chip0 : chip1;
+
+        chip.writeReg(0x68 + v1, wordLine1);
+        chip.writeReg(0x68 + v2, wordLine2);
+
+        chip.writeReg(0x00 + v1, 0xff80);
+        chip.writeReg(0x00 + v2, 0xff80);
+        chip.writeReg(0x20 + v1, 0x7f80);
+        chip.writeReg(0x20 + v2, 0x7f80);
+        chip.writeReg(0x10 + v1, 0x7f80);
+        chip.writeReg(0x10 + v2, 0x7f80);
+    }
+}
+
+void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased)
+{
+    uint32_t target = 0;
+    uint32_t rate = 0;
+    uint32_t sus = 0;
+
+    if (stage >= envDef.end)
+    {
+        target = 0;
+        const auto& step = envDef.steps[std::min(stage, 7)];
+        rate = step.rate ? step.rate : 67;
+        sus = 0;
+    }
+    else
+    {
+        const auto& step = envDef.steps[stage];
+        target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(step.level * velScale)), 0, 127));
+        rate = step.rate;
+        sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
+    }
+
+    if (keyFollow > 0 && note > 36)
+    {
+        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
+    }
+    rate = std::clamp(rate, 0u, 127u);
+
+    const uint32_t currentVal = chip.dca[vnum].current >> (ENV_DCA_SHIFT + 2);
+    const uint32_t dir = (target < currentVal) ? 1 : 0;
+    const uint16_t regWord = static_cast<uint16_t>((dir << 15) | (rate << 8) | (sus << 7) | (target & 0x7f));
+    chip.writeReg(0x00 + vnum, regWord);
+}
+
+void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased)
+{
+    uint32_t target = 0;
+    uint32_t rate = 0;
+    uint32_t sus = 0;
+
+    if (stage >= envDef.end)
+    {
+        target = 0;
+        const auto& step = envDef.steps[std::min(stage, 7)];
+        rate = step.rate ? step.rate : 39;
+        sus = 0;
+    }
+    else
+    {
+        const auto& step = envDef.steps[stage];
+        target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(step.level * velScale)), 0, 127));
+        rate = step.rate;
+        sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
+    }
+
+    if (keyFollow > 0 && note > 36)
+    {
+        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
+    }
+    rate = std::clamp(rate, 0u, 127u);
+
+    const uint32_t currentVal = chip.dcw[vnum].current >> (ENV_DCW_SHIFT + 3);
+    const uint32_t dir = (target < currentVal) ? 1 : 0;
+    const uint16_t regWord = static_cast<uint16_t>((dir << 15) | (rate << 8) | (sus << 7) | (target & 0x7f));
+    chip.writeReg(0x20 + vnum, regWord);
+}
+
+void CZ1Engine::writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased)
+{
+    uint32_t target = 0;
+    uint32_t rate = 0;
+    uint32_t sus = 0;
+
+    if (stage >= envDef.end)
+    {
+        target = 0;
+        const auto& step = envDef.steps[std::min(stage, 7)];
+        rate = step.rate ? step.rate : 87;
+        sus = 0;
+    }
+    else
+    {
+        const auto& step = envDef.steps[stage];
+        // Preserves bit 6 (level units: 0 = 6.25 cents/unit, 1 = 2 semitones/unit)
+        const uint8_t rawLvl = step.level & 0x7f;
+        const bool bit6 = (rawLvl >> 6) & 1;
+        const int units = rawLvl & 0x3f;
+        const int scaledUnits = std::clamp(static_cast<int>(std::round(units * velScale)), 0, 63);
+        target = static_cast<uint32_t>(scaledUnits | (bit6 ? 0x40 : 0));
+        rate = step.rate;
+        sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
+    }
+
+    if (keyFollow > 0 && note > 36)
+    {
+        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
+    }
+    rate = std::clamp(rate, 0u, 127u);
+
+    uint32_t targetPitch = (target & 0x3f) << (ENV_DCO_SHIFT + 5);
+    if ((target >> 6) & 1)
+        targetPitch <<= 5;
+
+    const uint32_t currentVal = chip.dco[vnum].current;
+    const uint32_t dir = (targetPitch < currentVal) ? 1 : 0;
+    const uint16_t regWord = static_cast<uint16_t>((dir << 15) | (rate << 8) | (sus << 7) | (target & 0x7f));
+    chip.writeReg(0x10 + vnum, regWord);
 }
 
 int CZ1Engine::getKeyRateOffset(int midiNote)
@@ -566,56 +713,139 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     voice.dcaStage = 0;
     voice.dcwStage = 0;
     voice.dcoStage = 0;
+    voice.line1 = LineVoiceState();
+    voice.line2 = LineVoiceState();
     voice.isReleased = false;
     voice.noteOnCounter = ++globalNoteCounter;
 
     const int kOffset = getKeyRateOffset(midiNote);
     voice.keyRateOffset = kOffset;
 
-    // Pitch determination (chromatic tracking from key 60 log baseline):
-    // Key 60 log baseline: V2=0x51d8 (~40.92 semi), V7=0x5200 (41.00 semi)
-    const int shift = (midiNote - 60) * 512;
-    const uint16_t pitchV1 = static_cast<uint16_t>(std::clamp(0x51d8 + shift, 0, 0xffff));
-    const uint16_t pitchV2 = static_cast<uint16_t>(std::clamp(0x5200 + shift, 0, 0xffff));
-
     const int v1 = voice.v1;
     const int v2 = voice.v2;
     Upd933Chip& chip = (voice.chipIndex == 0) ? chip0 : chip1;
 
-    chip.writeReg(0x60 + v1, pitchV1);
-    chip.writeReg(0x60 + v2, pitchV2);
+    if (currentPresetIndex == 0)
+    {
+        // =====================================================================
+        // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG BASELINE (A-1 BRASS 1)
+        // 100% bit-for-bit preserved from hardware debug log
+        // =====================================================================
+        const int shift = (midiNote - 60) * 512;
+        const uint16_t pitchV1 = static_cast<uint16_t>(std::clamp(0x51d8 + shift, 0, 0xffff));
+        const uint16_t pitchV2 = static_cast<uint16_t>(std::clamp(0x5200 + shift, 0, 0xffff));
+
+        chip.voices[v1].pmLevel = 0;
+        chip.voices[v2].pmLevel = 0;
+
+        chip.writeReg(0x60 + v1, pitchV1);
+        chip.writeReg(0x60 + v2, pitchV2);
+
+        chip.updatePitchStep(v1, pitchTable, pitchFine);
+        chip.updatePitchStep(v2, pitchTable, pitchFine);
+
+        // Reset phase counters (0x0000 for Line 1, 0x0080 for Line 2 from log)
+        chip.writeReg(0x98 + v1, 0x0000);
+        chip.writeReg(0x98 + v2, 0x0080);
+
+        // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target from velocity calibration: 117..127)
+        const uint8_t dcaAttackTarget = getDcaAttackTarget(vel);
+        const uint8_t dcaAttackRate = static_cast<uint8_t>(std::clamp(99 + kOffset, 0, 127));
+        const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | dcaAttackTarget);
+        chip.writeReg(0x00 + v1, dcaAttackWord);
+        chip.writeReg(0x00 + v2, dcaAttackWord);
+
+        // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target from velocity calibration: 88..127)
+        const uint8_t dcwAttackTarget = getDcwAttackTarget(vel);
+        const uint8_t dcwAttackRate = static_cast<uint8_t>(std::clamp(98 + kOffset, 0, 127));
+        const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | dcwAttackTarget);
+        chip.writeReg(0x20 + v1, dcwAttackWord);
+        chip.writeReg(0x20 + v2, dcwAttackWord);
+
+        // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target from velocity calibration: 3..33)
+        const uint8_t dcoAttackTarget = getDcoAttackTarget(vel);
+        const uint8_t dcoAttackRate = static_cast<uint8_t>(std::clamp(93 + kOffset, 0, 127));
+        const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | dcoAttackTarget);
+        chip.writeReg(0x10 + v1, dcoAttackWord);
+        chip.writeReg(0x10 + v2, dcoAttackWord);
+        return;
+    }
+
+    // =====================================================================
+    // PRESETS 1..63: MULTI-STEP SYSEX PRESETS
+    // =====================================================================
+    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const int lineMode = preset.lineMode;
+    const auto& lineDef1 = preset.lines[0];
+    const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
+
+    const bool hasLine1 = (lineMode != 1);
+    const bool hasLine2 = (lineMode != 0);
+
+    const int baseOctShift = preset.octave * 12 * 512;
+    const int keyShift = (midiNote - 60) * 512;
+    // Authentic Middle C (MIDI Key 60) standard Octave 0 baseline is 0x6a00 (C4 = 261.6 Hz).
+    // Note: BRASS 1 has octave = -1, which evaluates to 0x6a00 - 0x1800 = 0x5200 (C3 = 130.8 Hz).
+    const uint16_t basePitch = static_cast<uint16_t>(std::clamp(0x6a00 + keyShift + baseOctShift, 0, 0xffff));
+
+    const int detuneShift = static_cast<int>(std::round(preset.detuneSemitones * 512.0f));
+    const uint16_t line2Pitch = static_cast<uint16_t>(std::clamp(static_cast<int>(basePitch) + detuneShift, 0, 0xffff));
+
+    chip.voices[v1].pmLevel = 0;
+    chip.voices[v2].pmLevel = 0;
+
+    chip.writeReg(0x60 + v1, basePitch);
+    chip.writeReg(0x60 + v2, hasLine2 ? line2Pitch : basePitch);
 
     chip.updatePitchStep(v1, pitchTable, pitchFine);
     chip.updatePitchStep(v2, pitchTable, pitchFine);
 
-    // Reset phase counters (0x0000 for Line 1, 0x0080 for Line 2 from log)
+    // Reset phase counters
     chip.writeReg(0x98 + v1, 0x0000);
     chip.writeReg(0x98 + v2, 0x0080);
 
-    // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target from velocity calibration: 117..127)
-    const uint8_t dcaAttackTarget = getDcaAttackTarget(vel);
-    const uint8_t dcaAttackRate = static_cast<uint8_t>(std::clamp(99 + kOffset, 0, 127));
-    const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | dcaAttackTarget);
-    chip.writeReg(0x00 + v1, dcaAttackWord);
-    chip.writeReg(0x00 + v2, dcaAttackWord);
+    const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
+    const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
+    const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
 
-    // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target from velocity calibration: 88..127)
-    const uint8_t dcwAttackTarget = getDcwAttackTarget(vel);
-    const uint8_t dcwAttackRate = static_cast<uint8_t>(std::clamp(98 + kOffset, 0, 127));
-    const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | dcwAttackTarget);
-    chip.writeReg(0x20 + v1, dcwAttackWord);
-    chip.writeReg(0x20 + v2, dcwAttackWord);
+    const float velScaleDca2 = 1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f);
+    const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
+    const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
 
-    // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target from velocity calibration: 3..33)
-    const uint8_t dcoAttackTarget = getDcoAttackTarget(vel);
-    const uint8_t dcoAttackRate = static_cast<uint8_t>(std::clamp(93 + kOffset, 0, 127));
-    const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | dcoAttackTarget);
-    chip.writeReg(0x10 + v1, dcoAttackWord);
-    chip.writeReg(0x10 + v2, dcoAttackWord);
+    if (hasLine1)
+    {
+        writeDcaStep(chip, v1, lineDef1.dca, 0, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, false);
+        writeDcwStep(chip, v1, lineDef1.dcw, 0, velScaleDcw1, lineDef1.dcwKeyFollow, midiNote, false);
+        writeDcoStep(chip, v1, lineDef1.dco, 0, velScaleDco1, 0, midiNote, false);
+    }
+    else
+    {
+        chip.writeReg(0x00 + v1, 0xff80);
+        voice.line1.finished = true;
+    }
+
+    if (hasLine2)
+    {
+        writeDcaStep(chip, v2, lineDef2.dca, 0, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, false);
+        writeDcwStep(chip, v2, lineDef2.dcw, 0, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, false);
+        writeDcoStep(chip, v2, lineDef2.dco, 0, velScaleDco2, 0, midiNote, false);
+    }
+    else
+    {
+        chip.writeReg(0x00 + v2, 0xff80);
+        voice.line2.finished = true;
+    }
 }
 
 void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
 {
+    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const int lineMode = preset.lineMode;
+    const auto& lineDef1 = preset.lines[0];
+    const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
+    const bool hasLine1 = (lineMode != 1);
+    const bool hasLine2 = (lineMode != 0);
+
     for (auto& v : allocatedVoices)
     {
         if (v.active && v.midiNote == midiNote && !v.isReleased)
@@ -626,24 +856,77 @@ void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
             Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
             const int kOffset = v.keyRateOffset;
 
-            // Step 1 of release from log:
-            // DCA: dir=1, rate=77+kOffset, sus=0, target from velocity table (97..107)
-            v.dcaStage = 2;
-            const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
-            const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
-            const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
-            chip.writeReg(0x00 + v1, dcaRel1Word);
-            chip.writeReg(0x00 + v2, dcaRel1Word);
+            if (currentPresetIndex == 0)
+            {
+                // =============================================================
+                // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG RELEASE BASELINE
+                // =============================================================
+                v.dcaStage = 2;
+                const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
+                const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
+                const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
+                chip.writeReg(0x00 + v1, dcaRel1Word);
+                chip.writeReg(0x00 + v2, dcaRel1Word);
 
-            // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
-            v.dcwStage = 3;
-            chip.writeReg(0x20 + v1, 0xa780);
-            chip.writeReg(0x20 + v2, 0xa780);
+                // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
+                v.dcwStage = 3;
+                chip.writeReg(0x20 + v1, 0xa780);
+                chip.writeReg(0x20 + v2, 0xa780);
 
-            // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
-            v.dcoStage = 2;
-            chip.writeReg(0x10 + v1, 0xd780);
-            chip.writeReg(0x10 + v2, 0xd780);
+                // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
+                v.dcoStage = 2;
+                chip.writeReg(0x10 + v1, 0xd780);
+                chip.writeReg(0x10 + v2, 0xd780);
+                continue;
+            }
+
+            // =============================================================
+            // PRESETS 1..63: MULTI-STEP SYSEX RELEASE
+            // =============================================================
+            const int vel = v.velocity;
+            const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
+            const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
+            const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
+
+            const float velScaleDca2 = 1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f);
+            const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
+            const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+
+            if (hasLine1 && !v.line1.finished)
+            {
+                if (lineDef1.dca.sustain != -1 && v.line1.dcaStage <= lineDef1.dca.sustain)
+                    v.line1.dcaStage = lineDef1.dca.sustain + 1;
+                if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
+                writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, true);
+
+                if (lineDef1.dcw.sustain != -1 && v.line1.dcwStage <= lineDef1.dcw.sustain)
+                    v.line1.dcwStage = lineDef1.dcw.sustain + 1;
+                if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
+                writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, midiNote, true);
+
+                if (lineDef1.dco.sustain != -1 && v.line1.dcoStage <= lineDef1.dco.sustain)
+                    v.line1.dcoStage = lineDef1.dco.sustain + 1;
+                if (v.line1.dcoStage > lineDef1.dco.end) v.line1.dcoStage = lineDef1.dco.end;
+                writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, midiNote, true);
+            }
+
+            if (hasLine2 && !v.line2.finished)
+            {
+                if (lineDef2.dca.sustain != -1 && v.line2.dcaStage <= lineDef2.dca.sustain)
+                    v.line2.dcaStage = lineDef2.dca.sustain + 1;
+                if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
+                writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, true);
+
+                if (lineDef2.dcw.sustain != -1 && v.line2.dcwStage <= lineDef2.dcw.sustain)
+                    v.line2.dcwStage = lineDef2.dcw.sustain + 1;
+                if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
+                writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, true);
+
+                if (lineDef2.dco.sustain != -1 && v.line2.dcoStage <= lineDef2.dco.sustain)
+                    v.line2.dcoStage = lineDef2.dco.sustain + 1;
+                if (v.line2.dcoStage > lineDef2.dco.end) v.line2.dcoStage = lineDef2.dco.end;
+                writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, midiNote, true);
+            }
         }
     }
 }
@@ -669,6 +952,13 @@ int CZ1Engine::getActiveVoiceCount() const
 
 void CZ1Engine::processEnvelopeSequencer()
 {
+    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const int lineMode = preset.lineMode;
+    const auto& lineDef1 = preset.lines[0];
+    const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
+    const bool hasLine1 = (lineMode != 1);
+    const bool hasLine2 = (lineMode != 0);
+
     for (auto& v : allocatedVoices)
     {
         if (!v.active) continue;
@@ -678,78 +968,215 @@ void CZ1Engine::processEnvelopeSequencer()
         Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
         const int kOffset = v.keyRateOffset;
 
-        // DCA envelope sequencer
-        if (v.dcaStage == 0) // Attack -> Decay/Sustain
+        if (currentPresetIndex == 0)
         {
-            if (chip.dca[v1].current >= chip.dca[v1].target)
+            // =================================================================
+            // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG ENVELOPE SEQUENCER
+            // =================================================================
+            if (v.dcaStage == 0) // Attack -> Decay/Sustain
             {
-                v.dcaStage = 1;
-                // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target from velocity: 116..126)
-                const uint8_t dcaDecayTarget = getDcaSustainTarget(v.velocity);
-                const uint8_t dcaDecayRate = static_cast<uint8_t>(std::clamp(105 + kOffset, 0, 127));
-                const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | dcaDecayTarget);
-                chip.writeReg(0x00 + v1, dcaDecayWord);
-                chip.writeReg(0x00 + v2, dcaDecayWord);
+                if (chip.dca[v1].current >= chip.dca[v1].target)
+                {
+                    v.dcaStage = 1;
+                    // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target from velocity: 116..126)
+                    const uint8_t dcaDecayTarget = getDcaSustainTarget(v.velocity);
+                    const uint8_t dcaDecayRate = static_cast<uint8_t>(std::clamp(105 + kOffset, 0, 127));
+                    const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | dcaDecayTarget);
+                    chip.writeReg(0x00 + v1, dcaDecayWord);
+                    chip.writeReg(0x00 + v2, dcaDecayWord);
+                }
             }
-        }
-        else if (v.dcaStage == 2) // Rel 1 -> Rel 2
-        {
-            if (chip.dca[v1].current <= chip.dca[v1].target)
+            else if (v.dcaStage == 2) // Rel 1 -> Rel 2
             {
-                v.dcaStage = 3;
-                // Release 2: dir=1, rate=67+kOffset, sus=0, target=0
-                const uint8_t dcaRel2Rate = static_cast<uint8_t>(std::clamp(67 + kOffset, 0, 127));
-                const uint16_t dcaRel2Word = static_cast<uint16_t>((1 << 15) | (dcaRel2Rate << 8) | 0);
-                chip.writeReg(0x00 + v1, dcaRel2Word);
-                chip.writeReg(0x00 + v2, dcaRel2Word);
+                if (chip.dca[v1].current <= chip.dca[v1].target)
+                {
+                    v.dcaStage = 3;
+                    // Release 2: dir=1, rate=67+kOffset, sus=0, target=0
+                    const uint8_t dcaRel2Rate = static_cast<uint8_t>(std::clamp(67 + kOffset, 0, 127));
+                    const uint16_t dcaRel2Word = static_cast<uint16_t>((1 << 15) | (dcaRel2Rate << 8) | 0);
+                    chip.writeReg(0x00 + v1, dcaRel2Word);
+                    chip.writeReg(0x00 + v2, dcaRel2Word);
+                }
             }
-        }
-        else if (v.dcaStage == 3) // Rel 2 -> Idle
-        {
-            if (chip.dca[v1].current <= 0)
+            else if (v.dcaStage == 3) // Rel 2 -> Idle
             {
-                v.dcaStage = 4;
-                v.active = false;
-                v.isReleased = false;
-                chip.writeReg(0x00 + v1, 0xff80);
-                chip.writeReg(0x00 + v2, 0xff80);
+                if (chip.dca[v1].current <= 0)
+                {
+                    v.dcaStage = 4;
+                    v.active = false;
+                    v.isReleased = false;
+                    chip.writeReg(0x00 + v1, 0xff80);
+                    chip.writeReg(0x00 + v2, 0xff80);
+                }
+            }
+
+            // DCW envelope sequencer
+            if (v.dcwStage == 0) // Attack -> Decay 1
+            {
+                if (chip.dcw[v1].current >= chip.dcw[v1].target)
+                {
+                    v.dcwStage = 1;
+                    // Decay 1: dir=1, rate=56, sus=0, target from velocity (55..94)
+                    const uint8_t dcwDecayTarget = getDcwDecay1Target(v.velocity);
+                    const uint16_t dcwDecayWord = static_cast<uint16_t>((1 << 15) | (56 << 8) | dcwDecayTarget);
+                    chip.writeReg(0x20 + v1, dcwDecayWord);
+                    chip.writeReg(0x20 + v2, dcwDecayWord);
+                }
+            }
+            else if (v.dcwStage == 1) // Decay 1 -> Decay 2 / Sustain
+            {
+                if (chip.dcw[v1].current <= chip.dcw[v1].target)
+                {
+                    v.dcwStage = 2;
+                    // Sustain: 0x34d1 (dir=0, rate=52, sus=1, target=81)
+                    chip.writeReg(0x20 + v1, 0x34d1);
+                    chip.writeReg(0x20 + v2, 0x34d1);
+                }
+            }
+
+            // DCO envelope sequencer
+            if (v.dcoStage == 0) // Attack -> Decay to base
+            {
+                if (chip.dco[v1].current >= chip.dco[v1].target)
+                {
+                    v.dcoStage = 1;
+                    // Decay to base: 0xd780 (dir=1, rate=87, sus=1, target=0)
+                    chip.writeReg(0x10 + v1, 0xd780);
+                    chip.writeReg(0x10 + v2, 0xd780);
+                }
+            }
+            continue;
+        }
+
+        // =====================================================================
+        // PRESETS 1..63: MULTI-STEP SYSEX ENVELOPE SEQUENCER
+        // =====================================================================
+        const int vel = v.velocity;
+        const int note = v.midiNote;
+        const bool isReleased = v.isReleased;
+
+        const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
+        const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
+        const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
+
+        const float velScaleDca2 = 1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f);
+        const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
+        const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+
+        // Line 1 Progression
+        if (hasLine1 && !v.line1.finished)
+        {
+            if (chip.dca[v1].current == chip.dca[v1].target)
+            {
+                if (v.line1.dcaStage == lineDef1.dca.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line1.dcaStage < lineDef1.dca.end)
+                {
+                    v.line1.dcaStage++;
+                    writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, note, isReleased);
+                }
+                else
+                {
+                    if (chip.dca[v1].current == 0)
+                    {
+                        v.line1.finished = true;
+                        chip.writeReg(0x00 + v1, 0xff80);
+                    }
+                }
+            }
+
+            if (chip.dcw[v1].current == chip.dcw[v1].target)
+            {
+                if (v.line1.dcwStage == lineDef1.dcw.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line1.dcwStage < lineDef1.dcw.end)
+                {
+                    v.line1.dcwStage++;
+                    writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, note, isReleased);
+                }
+            }
+
+            if (chip.dco[v1].current == chip.dco[v1].target)
+            {
+                if (v.line1.dcoStage == lineDef1.dco.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line1.dcoStage < lineDef1.dco.end)
+                {
+                    v.line1.dcoStage++;
+                    writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, note, isReleased);
+                }
             }
         }
 
-        // DCW envelope sequencer
-        if (v.dcwStage == 0) // Attack -> Decay 1
+        // Line 2 Progression
+        if (hasLine2 && !v.line2.finished)
         {
-            if (chip.dcw[v1].current >= chip.dcw[v1].target)
+            if (chip.dca[v2].current == chip.dca[v2].target)
             {
-                v.dcwStage = 1;
-                // Decay 1: dir=1, rate=56, sus=0, target from velocity (55..94)
-                const uint8_t dcwDecayTarget = getDcwDecay1Target(v.velocity);
-                const uint16_t dcwDecayWord = static_cast<uint16_t>((1 << 15) | (56 << 8) | dcwDecayTarget);
-                chip.writeReg(0x20 + v1, dcwDecayWord);
-                chip.writeReg(0x20 + v2, dcwDecayWord);
+                if (v.line2.dcaStage == lineDef2.dca.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line2.dcaStage < lineDef2.dca.end)
+                {
+                    v.line2.dcaStage++;
+                    writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, note, isReleased);
+                }
+                else
+                {
+                    if (chip.dca[v2].current == 0)
+                    {
+                        v.line2.finished = true;
+                        chip.writeReg(0x00 + v2, 0xff80);
+                    }
+                }
             }
-        }
-        else if (v.dcwStage == 1) // Decay 1 -> Decay 2 / Sustain
-        {
-            if (chip.dcw[v1].current <= chip.dcw[v1].target)
+
+            if (chip.dcw[v2].current == chip.dcw[v2].target)
             {
-                v.dcwStage = 2;
-                // Sustain: 0x34d1 (dir=0, rate=52, sus=1, target=81)
-                chip.writeReg(0x20 + v1, 0x34d1);
-                chip.writeReg(0x20 + v2, 0x34d1);
+                if (v.line2.dcwStage == lineDef2.dcw.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line2.dcwStage < lineDef2.dcw.end)
+                {
+                    v.line2.dcwStage++;
+                    writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, note, isReleased);
+                }
+            }
+
+            if (chip.dco[v2].current == chip.dco[v2].target)
+            {
+                if (v.line2.dcoStage == lineDef2.dco.sustain && !isReleased)
+                {
+                    // Hold sustain
+                }
+                else if (v.line2.dcoStage < lineDef2.dco.end)
+                {
+                    v.line2.dcoStage++;
+                    writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, note, isReleased);
+                }
             }
         }
 
-        // DCO envelope sequencer
-        if (v.dcoStage == 0) // Attack -> Decay to base
+        const bool line1Done = !hasLine1 || v.line1.finished;
+        const bool line2Done = !hasLine2 || v.line2.finished;
+        if (line1Done && line2Done)
         {
-            if (chip.dco[v1].current >= chip.dco[v1].target)
-            {
-                v.dcoStage = 1;
-                // Decay to base: 0xd780 (dir=1, rate=87, sus=1, target=0)
-                chip.writeReg(0x10 + v1, 0xd780);
-                chip.writeReg(0x10 + v2, 0xd780);
-            }
+            v.active = false;
+            v.isReleased = false;
+            chip.writeReg(0x00 + v1, 0xff80);
+            chip.writeReg(0x00 + v2, 0xff80);
+            chip.writeReg(0x20 + v1, 0x7f80);
+            chip.writeReg(0x20 + v2, 0x7f80);
+            chip.writeReg(0x10 + v1, 0x7f80);
+            chip.writeReg(0x10 + v2, 0x7f80);
         }
     }
 }
@@ -758,13 +1185,13 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
 {
     processEnvelopeSequencer();
 
-    const int16_t raw0 = chip0.renderChipSample(cosineTable, volumeTable);
-    const int16_t raw1 = chip1.renderChipSample(cosineTable, volumeTable);
+    const int16_t raw0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
+    const int16_t raw1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
 
-    const float f0 = static_cast<float>(raw0) / 32768.0f;
-    const float f1 = static_cast<float>(raw1) / 32768.0f;
+    const float f0 = static_cast<float>(raw0) / 10000.0f;
+    const float f1 = static_cast<float>(raw1) / 10000.0f;
 
-    const float mono = (f0 + f1) * 0.5f;
+    const float mono = std::tanh(f0 + f1);
 
     if (chorusEnabled)
     {
@@ -795,3 +1222,22 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
         outRight = mono;
     }
 }
+
+void CZ1Engine::loadPreset(int presetIndex)
+{
+    currentPresetIndex = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
+    applyPresetWaveforms();
+}
+
+const char* CZ1Engine::getPresetName(int presetIndex) const
+{
+    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
+    return CZ1_FACTORY_PRESETS[idx].name;
+}
+
+const char* CZ1Engine::getPresetSlot(int presetIndex) const
+{
+    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
+    return CZ1_FACTORY_PRESETS[idx].slot;
+}
+

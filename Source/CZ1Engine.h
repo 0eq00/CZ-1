@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "CZ1FactoryPresets.h"
+
 class CZ1Engine
 {
 public:
@@ -60,6 +62,14 @@ public:
         int v2 = 7;        // Line 2 voice
     };
 
+    struct LineVoiceState
+    {
+        int dcaStage = 0;
+        int dcwStage = 0;
+        int dcoStage = 0;
+        bool finished = false;
+    };
+
     struct NoteVoice
     {
         int  midiNote = -1;
@@ -73,6 +83,9 @@ public:
         int  dcaStage = 0;
         int  dcwStage = 0;
         int  dcoStage = 0;
+        LineVoiceState line1;
+        LineVoiceState line2;
+
         bool isReleased = false;
         int  keyRateOffset = 0;
         uint64_t noteOnCounter = 0;
@@ -88,11 +101,12 @@ public:
 
         uint32_t sampleCount = 0;
         int16_t  lastSample = 0;
+        uint32_t noiseLfsr = 0x12345678;
 
         void reset();
         void writeReg(uint8_t reg, uint16_t val);
-        int16_t renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable);
-        int16_t renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable);
+        int16_t renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
+        int16_t renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
         void updatePitchStep(int vnum, const uint32_t* pitchTable, const uint16_t* pitchFine);
     };
 
@@ -103,6 +117,12 @@ public:
     void noteOn(int midiNote, int velocity = 81);
     void noteOff(int midiNote, int velocity = 66);
     void allNotesOff();
+
+    void loadPreset(int presetIndex);
+    int getCurrentPresetIndex() const { return currentPresetIndex; }
+    const char* getPresetName(int presetIndex) const;
+    const char* getPresetSlot(int presetIndex) const;
+    static constexpr int NUM_PRESETS = 64;
 
     // Render 1 stereo sample frame at native 40,000 Hz
     void renderNativeSample(float& outLeft, float& outRight);
@@ -125,6 +145,11 @@ private:
     static uint8_t getDcwAttackTarget(int velocity);
     static uint8_t getDcwDecay1Target(int velocity);
     static uint8_t getDcoAttackTarget(int velocity);
+
+    void writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
+    void writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
+    void writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
+    void applyPresetWaveforms();
 
     void initTables();
     void processEnvelopeSequencer();
@@ -162,4 +187,6 @@ private:
     float chorusBuffer[CHORUS_BUF_SIZE] = {0.0f};
     int   chorusWritePos = 0;
     float chorusPhase = 0.0f;
+
+    int   currentPresetIndex = 0;
 };

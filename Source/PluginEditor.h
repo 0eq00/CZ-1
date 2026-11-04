@@ -27,6 +27,8 @@ private:
     juce::MidiKeyboardComponent keyboardComponent;
 
     juce::ToggleButton chorusButton   { "Stereo Chorus" };
+    juce::ComboBox     presetSelector;
+    juce::Label        presetLabel;
     juce::Slider       volumeSlider;
     juce::Label        volumeLabel;
 
