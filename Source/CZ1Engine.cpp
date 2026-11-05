@@ -61,6 +61,7 @@ void CZ1Engine::Upd933Chip::reset()
 {
     sampleCount = 0;
     lastSample = 0;
+    noiseLfsr = 0x12345678;
     regs.fill(0);
     for (int i = 0; i < 8; ++i)
     {
@@ -76,7 +77,6 @@ void CZ1Engine::Upd933Chip::writeReg(uint8_t reg, uint16_t val)
     regs[reg] = val;
     const int vnum = reg & 7;
     Voice& voice = voices[vnum];
-    Voice& modVoice = voices[(vnum + 6) & 7];
 
     switch (reg >> 3)
     {
@@ -122,12 +122,9 @@ void CZ1Engine::Upd933Chip::writeReg(uint8_t reg, uint16_t val)
         else
             voice.wave[1] = voice.wave[0];
         voice.window = (val >> 6) & 7;
-        if (!(vnum & 1))
-        {
-            modVoice.ringMod   = (val >> 5) & 1;
-            modVoice.pitchMod  = (val >> 3) & 3;
-            modVoice.muteOther = (val >> 2) & 1;
-        }
+        voice.ringMod   = (val >> 5) & 1;
+        voice.pitchMod  = (val >> 3) & 3;
+        voice.muteOther = (val >> 2) & 1;
         break;
     case 0x13: // Phase counter
         voice.position = (static_cast<uint32_t>(val) << (PITCH_SHIFT - 4));
@@ -279,7 +276,10 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
             voice.pmLevel = lastSample;
             break;
         case 3:
-            voice.pmLevel = static_cast<int16_t>((rand() % 2) * (32 << NOTE_SHIFT));
+            noiseLfsr ^= noiseLfsr << 13;
+            noiseLfsr ^= noiseLfsr >> 17;
+            noiseLfsr ^= noiseLfsr << 5;
+            voice.pmLevel = (noiseLfsr & 1) ? static_cast<int16_t>(32 << NOTE_SHIFT) : 0;
             break;
         }
     }
@@ -371,6 +371,19 @@ void CZ1Engine::applyPresetWaveforms()
     const uint16_t wordLine1 = preset.lines[0].rawWord;
     const uint16_t wordLine2 = (lineMode == 2) ? preset.lines[0].rawWord : preset.lines[1].rawWord;
 
+    const bool isRingMod = (wordLine1 >> 5) & 1;
+    const uint8_t pitchMod = (wordLine1 >> 3) & 3;
+    const bool isNoiseMod = (pitchMod == 3);
+
+    // Line 1: waveforms & window from wordLine1.
+    // In Casio CZ architecture, Ring Mod is evaluated on Line 1 (which renders after Line 2 in each pair).
+    // Line 1 is the melodic tonal carrier and does NOT receive noise modulation.
+    const uint16_t regWordV1 = static_cast<uint16_t>((wordLine1 & 0xffc0) | (isRingMod ? 0x20 : 0) | (pitchMod == 2 ? 0x10 : 0) | (wordLine1 & 0x04));
+
+    // Line 2: waveforms & window from wordLine2.
+    // In Casio CZ architecture, Noise Mod (pitchMod = 3) is applied on Line 2!
+    const uint16_t regWordV2 = static_cast<uint16_t>((wordLine2 & 0xffc0) | (isNoiseMod ? 0x18 : 0));
+
     for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
     {
         const int chipIdx = voicePairs[i].chipIndex;
@@ -378,8 +391,8 @@ void CZ1Engine::applyPresetWaveforms()
         const int v2 = voicePairs[i].v2;
         Upd933Chip& chip = (chipIdx == 0) ? chip0 : chip1;
 
-        chip.writeReg(0x68 + v1, wordLine1);
-        chip.writeReg(0x68 + v2, wordLine2);
+        chip.writeReg(0x68 + v1, regWordV1);
+        chip.writeReg(0x68 + v2, regWordV2);
 
         chip.writeReg(0x00 + v1, 0xff80);
         chip.writeReg(0x00 + v2, 0xff80);
