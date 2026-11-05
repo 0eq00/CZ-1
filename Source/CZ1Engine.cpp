@@ -424,9 +424,14 @@ void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
         sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
     }
 
-    if (keyFollow > 0 && note > 36)
+    // Authentic Casio CZ-1 Key Follow rate scaling:
+    // In the uPD933 chip, every +8 in the rate register doubles the envelope speed.
+    // Setting keyFollow = 9 provides full keyboard tracking (doubling speed per octave = +8 rate / 12 semitones).
+    // Key Follow adds an offset to the rate register, rather than multiplying rate (which caused exponential blowup).
+    if (keyFollow > 0)
     {
-        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
+        const int rateOffset = static_cast<int>(std::round((keyFollow * (note - 36)) / 9.0f));
+        rate = static_cast<uint32_t>(std::clamp(static_cast<int>(rate) + rateOffset, 0, 127));
     }
     rate = std::clamp(rate, 0u, 127u);
 
@@ -457,9 +462,18 @@ void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
         sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
     }
 
-    if (keyFollow > 0 && note > 36)
+    if (keyFollow > 0)
     {
-        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
+        // DCW rate scales mildly with key follow (approx. half the slope of DCA)
+        const int dcwRateOffset = static_cast<int>(std::round((keyFollow * (note - 36)) / 18.0f));
+        rate = static_cast<uint32_t>(std::clamp(static_cast<int>(rate) + dcwRateOffset, 0, 127));
+
+        // DCW Key Follow reduces upper harmonics on high notes (approaches pure sine wave)
+        if (note > 36)
+        {
+            const float rollOff = 1.0f - (keyFollow / 9.0f) * ((note - 36) / 96.0f) * 0.25f;
+            target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(target * std::max(0.65f, rollOff))), 0, 127));
+        }
     }
     rate = std::clamp(rate, 0u, 127u);
 
@@ -495,10 +509,7 @@ void CZ1Engine::writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
         sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
     }
 
-    if (keyFollow > 0 && note > 36)
-    {
-        rate = static_cast<uint32_t>(std::round(rate * (1.0f + (keyFollow * (note - 36)) / 96.0f)));
-    }
+    // DCO pitch envelope does NOT have key follow in CZ synths
     rate = std::clamp(rate, 0u, 127u);
 
     uint32_t targetPitch = (target & 0x3f) << (ENV_DCO_SHIFT + 5);
