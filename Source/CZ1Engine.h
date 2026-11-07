@@ -58,8 +58,8 @@ public:
     struct VoicePairDef
     {
         int chipIndex = 0; // 0 or 1
-        int v1 = 2;        // Line 1 voice
-        int v2 = 7;        // Line 2 voice
+        int v1 = 7;        // Line 1 voice (odd)
+        int v2 = 2;        // Line 2 voice (even)
     };
 
     struct LineVoiceState
@@ -77,8 +77,8 @@ public:
         bool active = false;
         int  pairIndex = 0;
         int  chipIndex = 0;
-        int  v1 = 2;
-        int  v2 = 7;
+        int  v1 = 7;
+        int  v2 = 2;
 
         int  dcaStage = 0;
         int  dcwStage = 0;
@@ -165,16 +165,16 @@ private:
 
     static constexpr int NUM_VOICE_PAIRS = 8;
     const VoicePairDef voicePairs[NUM_VOICE_PAIRS] = {
-        // Chip 0: 4 dual-line voice pairs (Line 1: even, Line 2: odd)
-        {0, 2, 7}, // Pair 0
-        {0, 4, 1}, // Pair 1
-        {0, 6, 3}, // Pair 2
-        {0, 0, 5}, // Pair 3
+        // Chip 0: 4 dual-line voice pairs (Line 1: odd, Line 2: even)
+        {0, 7, 2}, // Pair 0
+        {0, 1, 4}, // Pair 1
+        {0, 3, 6}, // Pair 2
+        {0, 5, 0}, // Pair 3
         // Chip 1: 4 dual-line voice pairs
-        {1, 2, 7}, // Pair 4
-        {1, 4, 1}, // Pair 5
-        {1, 6, 3}, // Pair 6
-        {1, 0, 5}  // Pair 7
+        {1, 7, 2}, // Pair 4
+        {1, 1, 4}, // Pair 5
+        {1, 3, 6}, // Pair 6
+        {1, 5, 0}  // Pair 7
     };
 
     std::array<NoteVoice, NUM_VOICE_PAIRS> allocatedVoices;

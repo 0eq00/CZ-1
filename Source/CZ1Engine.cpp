@@ -376,13 +376,12 @@ void CZ1Engine::applyPresetWaveforms()
     const bool isNoiseMod = (pitchMod == 3);
 
     // Line 1: waveforms & window from wordLine1.
-    // In Casio CZ architecture, Ring Mod is evaluated on Line 1 (which renders after Line 2 in each pair).
-    // Line 1 is the melodic tonal carrier and does NOT receive noise modulation.
-    const uint16_t regWordV1 = static_cast<uint16_t>((wordLine1 & 0xffc0) | (isRingMod ? 0x20 : 0) | (pitchMod == 2 ? 0x10 : 0) | (wordLine1 & 0x04));
+    // Line 1 is the melodic tonal carrier (rendered first in the pair).
+    const uint16_t regWordV1 = static_cast<uint16_t>(wordLine1 & 0xffc0);
 
     // Line 2: waveforms & window from wordLine2.
-    // In Casio CZ architecture, Noise Mod (pitchMod = 3) is applied on Line 2!
-    const uint16_t regWordV2 = static_cast<uint16_t>((wordLine2 & 0xffc0) | (isNoiseMod ? 0x18 : 0));
+    // Ring Modulation and Noise Modulation are applied on Line 2 (which modulates Line 1).
+    const uint16_t regWordV2 = static_cast<uint16_t>((wordLine2 & 0xffc0) | (isRingMod ? 0x20 : 0) | (pitchMod == 2 ? 0x10 : 0) | (isNoiseMod ? 0x18 : 0) | (wordLine1 & 0x04));
 
     for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
     {
@@ -756,8 +755,8 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
         // 100% bit-for-bit preserved from hardware debug log
         // =====================================================================
         const int shift = (midiNote - 60) * 512;
-        const uint16_t pitchV1 = static_cast<uint16_t>(std::clamp(0x51d8 + shift, 0, 0xffff));
-        const uint16_t pitchV2 = static_cast<uint16_t>(std::clamp(0x5200 + shift, 0, 0xffff));
+        const uint16_t pitchV1 = static_cast<uint16_t>(std::clamp(0x5200 + shift, 0, 0xffff));
+        const uint16_t pitchV2 = static_cast<uint16_t>(std::clamp(0x51d8 + shift, 0, 0xffff));
 
         chip.voices[v1].pmLevel = 0;
         chip.voices[v2].pmLevel = 0;
@@ -768,9 +767,9 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
         chip.updatePitchStep(v1, pitchTable, pitchFine);
         chip.updatePitchStep(v2, pitchTable, pitchFine);
 
-        // Reset phase counters (0x0000 for Line 1, 0x0080 for Line 2 from log)
-        chip.writeReg(0x98 + v1, 0x0000);
-        chip.writeReg(0x98 + v2, 0x0080);
+        // Reset phase counters (0x0080 for Line 1, 0x0000 for Line 2 from log)
+        chip.writeReg(0x98 + v1, 0x0080);
+        chip.writeReg(0x98 + v2, 0x0000);
 
         // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target from velocity calibration: 117..127)
         const uint8_t dcaAttackTarget = getDcaAttackTarget(vel);
@@ -825,8 +824,8 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     chip.updatePitchStep(v2, pitchTable, pitchFine);
 
     // Reset phase counters
-    chip.writeReg(0x98 + v1, 0x0000);
-    chip.writeReg(0x98 + v2, 0x0080);
+    chip.writeReg(0x98 + v1, 0x0080);
+    chip.writeReg(0x98 + v2, 0x0000);
 
     const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
     const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
