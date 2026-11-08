@@ -87,6 +87,7 @@ public:
         LineVoiceState line2;
 
         bool isReleased = false;
+        bool keyHeld = false;
         int  keyRateOffset = 0;
         uint64_t noteOnCounter = 0;
     };
@@ -117,6 +118,10 @@ public:
     void noteOn(int midiNote, int velocity = 81);
     void noteOff(int midiNote, int velocity = 66);
     void allNotesOff();
+
+    void setSustainPedal(bool down);
+    bool isSustainPedalDown() const { return sustainPedal; }
+    void handleControlChange(int controller, int value);
 
     void loadPreset(int presetIndex);
     int getCurrentPresetIndex() const { return currentPresetIndex; }
@@ -149,6 +154,7 @@ private:
     void writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
     void writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
     void writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
+    void triggerVoiceRelease(NoteVoice& v);
     void applyPresetWaveforms();
 
     void initTables();
@@ -181,6 +187,7 @@ private:
     uint64_t globalNoteCounter = 0;
 
     bool chorusEnabled = true;
+    bool sustainPedal = false;
 
     // Stereo chorus delay line
     static constexpr int CHORUS_BUF_SIZE = 1024;

@@ -201,6 +201,10 @@ void CZ1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         {
             engine.noteOff (msg.getNoteNumber(), msg.getVelocity());
         }
+        else if (msg.isController())
+        {
+            engine.handleControlChange (msg.getControllerNumber(), msg.getControllerValue());
+        }
         else if (msg.isProgramChange())
         {
             engine.loadPreset (msg.getProgramChangeNumber());

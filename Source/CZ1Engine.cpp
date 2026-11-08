@@ -708,6 +708,23 @@ int CZ1Engine::findVoiceToAllocate(int midiNote)
     if (bestReleasingIdx != -1)
         return bestReleasingIdx;
 
+    // 3b. Priority: Steal a voice that is sustained ONLY by damper pedal (!v.keyHeld)
+    int bestPedalSustainedIdx = -1;
+    uint64_t oldestPedalSustainedTime = 0xffffffffffffffffULL;
+    for (int i = 0; i < NUM_VOICE_PAIRS; ++i)
+    {
+        if (allocatedVoices[i].active && !allocatedVoices[i].isReleased && !allocatedVoices[i].keyHeld)
+        {
+            if (allocatedVoices[i].noteOnCounter < oldestPedalSustainedTime)
+            {
+                oldestPedalSustainedTime = allocatedVoices[i].noteOnCounter;
+                bestPedalSustainedIdx = i;
+            }
+        }
+    }
+    if (bestPedalSustainedIdx != -1)
+        return bestPedalSustainedIdx;
+
     // 4. Priority: If all voices are held and active, steal the oldest voice (LRU)
     int oldestIdx = 0;
     uint64_t oldestTime = 0xffffffffffffffffULL;
@@ -741,6 +758,7 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     voice.line1 = LineVoiceState();
     voice.line2 = LineVoiceState();
     voice.isReleased = false;
+    voice.keyHeld = true;
     voice.noteOnCounter = ++globalNoteCounter;
 
     const int kOffset = getKeyRateOffset(midiNote);
@@ -862,8 +880,11 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     }
 }
 
-void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
+void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
 {
+    if (!v.active || v.isReleased) return;
+    v.isReleased = true;
+
     const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
     const int lineMode = preset.lineMode;
     const auto& lineDef1 = preset.lines[0];
@@ -871,139 +892,176 @@ void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
     const bool hasLine1 = (lineMode != 1);
     const bool hasLine2 = (lineMode != 0);
 
+    const int v1 = v.v1;
+    const int v2 = v.v2;
+    Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
+    const int kOffset = v.keyRateOffset;
+    const int midiNote = v.midiNote;
+
+    if (currentPresetIndex == 0)
+    {
+        // =============================================================
+        // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG RELEASE BASELINE
+        // =============================================================
+        v.dcaStage = 2;
+        const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
+        const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
+        const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
+        chip.writeReg(0x00 + v1, dcaRel1Word);
+        chip.writeReg(0x00 + v2, dcaRel1Word);
+
+        // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
+        v.dcwStage = 3;
+        chip.writeReg(0x20 + v1, 0xa780);
+        chip.writeReg(0x20 + v2, 0xa780);
+
+        // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
+        v.dcoStage = 2;
+        chip.writeReg(0x10 + v1, 0xd780);
+        chip.writeReg(0x10 + v2, 0xd780);
+        return;
+    }
+
+    // =============================================================
+    // PRESETS 1..63: MULTI-STEP SYSEX RELEASE
+    // =============================================================
+    const int vel = v.velocity;
+    const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
+    const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
+    const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
+
+    const float velScaleDca2 = 1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f);
+    const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
+    const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+
+    if (hasLine1 && !v.line1.finished)
+    {
+        if (lineDef1.dca.sustain != -1)
+        {
+            if (v.line1.dcaStage <= lineDef1.dca.sustain)
+                v.line1.dcaStage = lineDef1.dca.sustain + 1;
+        }
+        else
+        {
+            v.line1.dcaStage = lineDef1.dca.end;
+        }
+        if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
+        writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, true);
+
+        if (lineDef1.dcw.sustain != -1)
+        {
+            if (v.line1.dcwStage <= lineDef1.dcw.sustain)
+                v.line1.dcwStage = lineDef1.dcw.sustain + 1;
+        }
+        else
+        {
+            v.line1.dcwStage = lineDef1.dcw.end;
+        }
+        if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
+        writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw2, lineDef1.dcwKeyFollow, midiNote, true);
+
+        if (lineDef1.dco.sustain != -1)
+        {
+            if (v.line1.dcoStage <= lineDef1.dco.sustain)
+                v.line1.dcoStage = lineDef1.dco.sustain + 1;
+        }
+        else
+        {
+            v.line1.dcoStage = lineDef1.dco.end;
+        }
+        if (v.line1.dcoStage > lineDef1.dco.end) v.line1.dcoStage = lineDef1.dco.end;
+        writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, midiNote, true);
+    }
+
+    if (hasLine2 && !v.line2.finished)
+    {
+        if (lineDef2.dca.sustain != -1)
+        {
+            if (v.line2.dcaStage <= lineDef2.dca.sustain)
+                v.line2.dcaStage = lineDef2.dca.sustain + 1;
+        }
+        else
+        {
+            v.line2.dcaStage = lineDef2.dca.end;
+        }
+        if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
+        writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, true);
+
+        if (lineDef2.dcw.sustain != -1)
+        {
+            if (v.line2.dcwStage <= lineDef2.dcw.sustain)
+                v.line2.dcwStage = lineDef2.dcw.sustain + 1;
+        }
+        else
+        {
+            v.line2.dcwStage = lineDef2.dcw.end;
+        }
+        if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
+        writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, true);
+
+        if (lineDef2.dco.sustain != -1)
+        {
+            if (v.line2.dcoStage <= lineDef2.dco.sustain)
+                v.line2.dcoStage = lineDef2.dco.sustain + 1;
+        }
+        else
+        {
+            v.line2.dcoStage = lineDef2.dco.end;
+        }
+        if (v.line2.dcoStage > lineDef2.dco.end) v.line2.dcoStage = lineDef2.dco.end;
+        writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, midiNote, true);
+    }
+}
+
+void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
+{
     for (auto& v : allocatedVoices)
     {
         if (v.active && v.midiNote == midiNote && !v.isReleased)
         {
-            v.isReleased = true;
-            const int v1 = v.v1;
-            const int v2 = v.v2;
-            Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
-            const int kOffset = v.keyRateOffset;
-
-            if (currentPresetIndex == 0)
+            v.keyHeld = false;
+            if (sustainPedal)
             {
-                // =============================================================
-                // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG RELEASE BASELINE
-                // =============================================================
-                v.dcaStage = 2;
-                const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
-                const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
-                const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
-                chip.writeReg(0x00 + v1, dcaRel1Word);
-                chip.writeReg(0x00 + v2, dcaRel1Word);
-
-                // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
-                v.dcwStage = 3;
-                chip.writeReg(0x20 + v1, 0xa780);
-                chip.writeReg(0x20 + v2, 0xa780);
-
-                // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
-                v.dcoStage = 2;
-                chip.writeReg(0x10 + v1, 0xd780);
-                chip.writeReg(0x10 + v2, 0xd780);
                 continue;
             }
+            triggerVoiceRelease(v);
+        }
+    }
+}
 
-            // =============================================================
-            // PRESETS 1..63: MULTI-STEP SYSEX RELEASE
-            // =============================================================
-            const int vel = v.velocity;
-            const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
-            const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
-            const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
-
-            const float velScaleDca2 = 1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f);
-            const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
-            const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
-
-            if (hasLine1 && !v.line1.finished)
+void CZ1Engine::setSustainPedal(bool down)
+{
+    sustainPedal = down;
+    if (!down)
+    {
+        for (auto& v : allocatedVoices)
+        {
+            if (v.active && !v.isReleased && !v.keyHeld)
             {
-                if (lineDef1.dca.sustain != -1)
-                {
-                    if (v.line1.dcaStage <= lineDef1.dca.sustain)
-                        v.line1.dcaStage = lineDef1.dca.sustain + 1;
-                }
-                else
-                {
-                    v.line1.dcaStage = lineDef1.dca.end;
-                }
-                if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
-                writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, true);
-
-                if (lineDef1.dcw.sustain != -1)
-                {
-                    if (v.line1.dcwStage <= lineDef1.dcw.sustain)
-                        v.line1.dcwStage = lineDef1.dcw.sustain + 1;
-                }
-                else
-                {
-                    v.line1.dcwStage = lineDef1.dcw.end;
-                }
-                if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
-                writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, midiNote, true);
-
-                if (lineDef1.dco.sustain != -1)
-                {
-                    if (v.line1.dcoStage <= lineDef1.dco.sustain)
-                        v.line1.dcoStage = lineDef1.dco.sustain + 1;
-                }
-                else
-                {
-                    v.line1.dcoStage = lineDef1.dco.end;
-                }
-                if (v.line1.dcoStage > lineDef1.dco.end) v.line1.dcoStage = lineDef1.dco.end;
-                writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, midiNote, true);
-            }
-
-            if (hasLine2 && !v.line2.finished)
-            {
-                if (lineDef2.dca.sustain != -1)
-                {
-                    if (v.line2.dcaStage <= lineDef2.dca.sustain)
-                        v.line2.dcaStage = lineDef2.dca.sustain + 1;
-                }
-                else
-                {
-                    v.line2.dcaStage = lineDef2.dca.end;
-                }
-                if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
-                writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, true);
-
-                if (lineDef2.dcw.sustain != -1)
-                {
-                    if (v.line2.dcwStage <= lineDef2.dcw.sustain)
-                        v.line2.dcwStage = lineDef2.dcw.sustain + 1;
-                }
-                else
-                {
-                    v.line2.dcwStage = lineDef2.dcw.end;
-                }
-                if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
-                writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, true);
-
-                if (lineDef2.dco.sustain != -1)
-                {
-                    if (v.line2.dcoStage <= lineDef2.dco.sustain)
-                        v.line2.dcoStage = lineDef2.dco.sustain + 1;
-                }
-                else
-                {
-                    v.line2.dcoStage = lineDef2.dco.end;
-                }
-                if (v.line2.dcoStage > lineDef2.dco.end) v.line2.dcoStage = lineDef2.dco.end;
-                writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, midiNote, true);
+                triggerVoiceRelease(v);
             }
         }
     }
 }
 
+void CZ1Engine::handleControlChange(int controller, int value)
+{
+    if (controller == 64)
+    {
+        setSustainPedal(value >= 64);
+    }
+}
+
 void CZ1Engine::allNotesOff()
 {
+    sustainPedal = false;
     for (auto& v : allocatedVoices)
     {
-        if (v.active)
-            noteOff(v.midiNote);
+        if (v.active && !v.isReleased)
+        {
+            v.keyHeld = false;
+            triggerVoiceRelease(v);
+        }
     }
 }
 
