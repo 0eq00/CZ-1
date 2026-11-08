@@ -425,11 +425,12 @@ void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
 
     // Authentic Casio CZ-1 Key Follow rate scaling:
     // In the uPD933 chip, every +8 in the rate register doubles the envelope speed.
-    // Setting keyFollow = 9 provides full keyboard tracking (doubling speed per octave = +8 rate / 12 semitones).
-    // Key Follow adds an offset to the rate register, rather than multiplying rate (which caused exponential blowup).
+    // Setting keyFollow = 9 provides full keyboard tracking, calibrated to hardware MAME debug log.
+    // Base rate is calibrated around Middle C (MIDI Key 60), scaling from -1 at low keys up to +28 at key 108.
     if (keyFollow > 0)
     {
-        const int rateOffset = static_cast<int>(std::round((keyFollow * (note - 36)) / 9.0f));
+        const int baseOffset = getKeyRateOffset(note);
+        const int rateOffset = static_cast<int>(std::round(baseOffset * (keyFollow / 9.0f)));
         rate = static_cast<uint32_t>(std::clamp(static_cast<int>(rate) + rateOffset, 0, 127));
     }
     rate = std::clamp(rate, 0u, 127u);
@@ -464,7 +465,8 @@ void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     if (keyFollow > 0)
     {
         // DCW rate scales mildly with key follow (approx. half the slope of DCA)
-        const int dcwRateOffset = static_cast<int>(std::round((keyFollow * (note - 36)) / 18.0f));
+        const int baseOffset = getKeyRateOffset(note);
+        const int dcwRateOffset = static_cast<int>(std::round(baseOffset * (keyFollow / 18.0f)));
         rate = static_cast<uint32_t>(std::clamp(static_cast<int>(rate) + dcwRateOffset, 0, 127));
 
         // DCW Key Follow reduces upper harmonics on high notes (approaches pure sine wave)
@@ -917,36 +919,78 @@ void CZ1Engine::noteOff(int midiNote, int /*velocity*/)
 
             if (hasLine1 && !v.line1.finished)
             {
-                if (lineDef1.dca.sustain != -1 && v.line1.dcaStage <= lineDef1.dca.sustain)
-                    v.line1.dcaStage = lineDef1.dca.sustain + 1;
+                if (lineDef1.dca.sustain != -1)
+                {
+                    if (v.line1.dcaStage <= lineDef1.dca.sustain)
+                        v.line1.dcaStage = lineDef1.dca.sustain + 1;
+                }
+                else
+                {
+                    v.line1.dcaStage = lineDef1.dca.end;
+                }
                 if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
                 writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, true);
 
-                if (lineDef1.dcw.sustain != -1 && v.line1.dcwStage <= lineDef1.dcw.sustain)
-                    v.line1.dcwStage = lineDef1.dcw.sustain + 1;
+                if (lineDef1.dcw.sustain != -1)
+                {
+                    if (v.line1.dcwStage <= lineDef1.dcw.sustain)
+                        v.line1.dcwStage = lineDef1.dcw.sustain + 1;
+                }
+                else
+                {
+                    v.line1.dcwStage = lineDef1.dcw.end;
+                }
                 if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
                 writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, midiNote, true);
 
-                if (lineDef1.dco.sustain != -1 && v.line1.dcoStage <= lineDef1.dco.sustain)
-                    v.line1.dcoStage = lineDef1.dco.sustain + 1;
+                if (lineDef1.dco.sustain != -1)
+                {
+                    if (v.line1.dcoStage <= lineDef1.dco.sustain)
+                        v.line1.dcoStage = lineDef1.dco.sustain + 1;
+                }
+                else
+                {
+                    v.line1.dcoStage = lineDef1.dco.end;
+                }
                 if (v.line1.dcoStage > lineDef1.dco.end) v.line1.dcoStage = lineDef1.dco.end;
                 writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, midiNote, true);
             }
 
             if (hasLine2 && !v.line2.finished)
             {
-                if (lineDef2.dca.sustain != -1 && v.line2.dcaStage <= lineDef2.dca.sustain)
-                    v.line2.dcaStage = lineDef2.dca.sustain + 1;
+                if (lineDef2.dca.sustain != -1)
+                {
+                    if (v.line2.dcaStage <= lineDef2.dca.sustain)
+                        v.line2.dcaStage = lineDef2.dca.sustain + 1;
+                }
+                else
+                {
+                    v.line2.dcaStage = lineDef2.dca.end;
+                }
                 if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
                 writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, true);
 
-                if (lineDef2.dcw.sustain != -1 && v.line2.dcwStage <= lineDef2.dcw.sustain)
-                    v.line2.dcwStage = lineDef2.dcw.sustain + 1;
+                if (lineDef2.dcw.sustain != -1)
+                {
+                    if (v.line2.dcwStage <= lineDef2.dcw.sustain)
+                        v.line2.dcwStage = lineDef2.dcw.sustain + 1;
+                }
+                else
+                {
+                    v.line2.dcwStage = lineDef2.dcw.end;
+                }
                 if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
                 writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, true);
 
-                if (lineDef2.dco.sustain != -1 && v.line2.dcoStage <= lineDef2.dco.sustain)
-                    v.line2.dcoStage = lineDef2.dco.sustain + 1;
+                if (lineDef2.dco.sustain != -1)
+                {
+                    if (v.line2.dcoStage <= lineDef2.dco.sustain)
+                        v.line2.dcoStage = lineDef2.dco.sustain + 1;
+                }
+                else
+                {
+                    v.line2.dcoStage = lineDef2.dco.end;
+                }
                 if (v.line2.dcoStage > lineDef2.dco.end) v.line2.dcoStage = lineDef2.dco.end;
                 writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, midiNote, true);
             }
@@ -1095,6 +1139,15 @@ void CZ1Engine::processEnvelopeSequencer()
                 {
                     // Hold sustain
                 }
+                else if (lineDef1.dca.sustain == -1 && v.line1.dcaStage == lineDef1.dca.end - 1 && lineDef1.dca.end > 1 && !isReleased)
+                {
+                    // Preset without sustain point: stays at decay stage until note-off or natural decay to silence
+                    if (chip.dca[v1].current == 0)
+                    {
+                        v.line1.finished = true;
+                        chip.writeReg(0x00 + v1, 0xff80);
+                    }
+                }
                 else if (v.line1.dcaStage < lineDef1.dca.end)
                 {
                     v.line1.dcaStage++;
@@ -1145,6 +1198,15 @@ void CZ1Engine::processEnvelopeSequencer()
                 if (v.line2.dcaStage == lineDef2.dca.sustain && !isReleased)
                 {
                     // Hold sustain
+                }
+                else if (lineDef2.dca.sustain == -1 && v.line2.dcaStage == lineDef2.dca.end - 1 && lineDef2.dca.end > 1 && !isReleased)
+                {
+                    // Preset without sustain point: stays at decay stage until note-off or natural decay to silence
+                    if (chip.dca[v2].current == 0)
+                    {
+                        v.line2.finished = true;
+                        chip.writeReg(0x00 + v2, 0xff80);
+                    }
                 }
                 else if (v.line2.dcaStage < lineDef2.dca.end)
                 {
