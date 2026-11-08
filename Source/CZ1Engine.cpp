@@ -451,8 +451,8 @@ void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     {
         target = 0;
         const auto& step = envDef.steps[std::min(stage, 7)];
-        rate = step.rate ? step.rate : 39;
-        sus = 0;
+        rate = step.rate;
+        sus = isReleased ? 1 : 0;
     }
     else
     {
@@ -494,8 +494,8 @@ void CZ1Engine::writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     {
         target = 0;
         const auto& step = envDef.steps[std::min(stage, 7)];
-        rate = step.rate ? step.rate : 87;
-        sus = 0;
+        rate = step.rate;
+        sus = isReleased ? 1 : 0;
     }
     else
     {
