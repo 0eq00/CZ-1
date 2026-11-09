@@ -292,7 +292,7 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
     return sample;
 }
 
-int16_t CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
+float CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
 {
     int32_t total = 0;
     static const int voiceMap[] = {5, 0, 7, 2, 1, 4, 3, 6};
@@ -301,7 +301,7 @@ int16_t CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const ui
         total += renderVoiceSample(v, cosine, volumeTable, pitchTable, pitchFine);
     }
     sampleCount++;
-    return static_cast<int16_t>(std::clamp(total, -32768, 32767));
+    return static_cast<float>(total) / 32768.0f;
 }
 
 // -----------------------------------------------------------------------------
@@ -1324,17 +1324,25 @@ void CZ1Engine::processEnvelopeSequencer()
     }
 }
 
+static inline float softLimit(float x)
+{
+    constexpr float threshold = 0.85f;
+    if (std::abs(x) <= threshold)
+        return x;
+    const float excess = std::abs(x) - threshold;
+    constexpr float margin = 1.0f - threshold;
+    const float compressed = threshold + margin * std::tanh(excess / margin);
+    return (x < 0.0f) ? -compressed : compressed;
+}
+
 void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
 {
     processEnvelopeSequencer();
 
-    const int16_t raw0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
-    const int16_t raw1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
+    const float f0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
+    const float f1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
 
-    const float f0 = static_cast<float>(raw0) / 10000.0f;
-    const float f1 = static_cast<float>(raw1) / 10000.0f;
-
-    const float mono = std::tanh(f0 + f1);
+    const float mono = (f0 + f1) * 0.65f;
 
     if (chorusEnabled)
     {
@@ -1356,13 +1364,13 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
 
         chorusWritePos = (chorusWritePos + 1) % CHORUS_BUF_SIZE;
 
-        outLeft  = mono * 0.72f + dL * 0.42f;
-        outRight = mono * 0.72f + dR * 0.42f;
+        outLeft  = softLimit(mono * 0.70f + dL * 0.35f);
+        outRight = softLimit(mono * 0.70f + dR * 0.35f);
     }
     else
     {
-        outLeft  = mono;
-        outRight = mono;
+        outLeft  = softLimit(f0 * 0.75f + f1 * 0.25f);
+        outRight = softLimit(f0 * 0.25f + f1 * 0.75f);
     }
 }
 

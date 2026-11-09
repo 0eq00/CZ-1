@@ -107,7 +107,7 @@ public:
         void reset();
         void writeReg(uint8_t reg, uint16_t val);
         int16_t renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
-        int16_t renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
+        float renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
         void updatePitchStep(int vnum, const uint32_t* pitchTable, const uint16_t* pitchFine);
     };
 
@@ -171,16 +171,15 @@ private:
 
     static constexpr int NUM_VOICE_PAIRS = 8;
     const VoicePairDef voicePairs[NUM_VOICE_PAIRS] = {
-        // Chip 0: 4 dual-line voice pairs (Line 1: odd, Line 2: even)
-        {0, 7, 2}, // Pair 0
-        {0, 1, 4}, // Pair 1
-        {0, 3, 6}, // Pair 2
-        {0, 5, 0}, // Pair 3
-        // Chip 1: 4 dual-line voice pairs
-        {1, 7, 2}, // Pair 4
-        {1, 1, 4}, // Pair 5
-        {1, 3, 6}, // Pair 6
-        {1, 5, 0}  // Pair 7
+        // Interleaved dual-line voice pairs alternating between Chip 0 and Chip 1 for load balancing
+        {0, 7, 2}, // Pair 0 (Chip 0)
+        {1, 7, 2}, // Pair 1 (Chip 1)
+        {0, 1, 4}, // Pair 2 (Chip 0)
+        {1, 1, 4}, // Pair 3 (Chip 1)
+        {0, 3, 6}, // Pair 4 (Chip 0)
+        {1, 3, 6}, // Pair 5 (Chip 1)
+        {0, 5, 0}, // Pair 6 (Chip 0)
+        {1, 5, 0}  // Pair 7 (Chip 1)
     };
 
     std::array<NoteVoice, NUM_VOICE_PAIRS> allocatedVoices;
