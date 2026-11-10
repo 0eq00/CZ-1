@@ -127,6 +127,11 @@ public:
     int getCurrentPresetIndex() const { return currentPresetIndex; }
     const char* getPresetName(int presetIndex) const;
     const char* getPresetSlot(int presetIndex) const;
+    const CZ1PresetDef& getPresetDef(int presetIndex) const;
+    const CZ1PresetDef& getCurrentPresetDef() const;
+    static const char* getWaveformName(uint8_t waveIndex);
+    static const char* getWindowName(uint8_t windowIndex);
+    static const char* getLineModeName(int8_t lineMode);
     static constexpr int NUM_PRESETS = 64;
 
     // Render 1 stereo sample frame at native 40,000 Hz

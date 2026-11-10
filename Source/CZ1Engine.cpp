@@ -346,25 +346,6 @@ void CZ1Engine::reset()
 
 void CZ1Engine::applyPresetWaveforms()
 {
-    if (currentPresetIndex == 0)
-    {
-        // Initial preset setup from MAME CZ-1 log:
-        // Wave 5 (Saw-Pulse) for all voices, idle envelopes
-        for (int v = 0; v < 8; ++v)
-        {
-            chip0.writeReg(0x68 + v, 0xa000);
-            chip1.writeReg(0x68 + v, 0xa000);
-
-            chip0.writeReg(0x00 + v, 0xff80); // DCA idle
-            chip1.writeReg(0x00 + v, 0xff80);
-            chip0.writeReg(0x20 + v, 0x7f80); // DCW idle
-            chip1.writeReg(0x20 + v, 0x7f80);
-            chip0.writeReg(0x10 + v, 0x7f80); // DCO idle
-            chip1.writeReg(0x10 + v, 0x7f80);
-        }
-        return;
-    }
-
     const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
     const int lineMode = preset.lineMode;
 
@@ -768,55 +749,6 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     const int v2 = voice.v2;
     Upd933Chip& chip = (voice.chipIndex == 0) ? chip0 : chip1;
 
-    if (currentPresetIndex == 0)
-    {
-        // =====================================================================
-        // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG BASELINE (A-1 BRASS 1)
-        // 100% bit-for-bit preserved from hardware debug log
-        // =====================================================================
-        const int shift = (midiNote - 60) * 512;
-        const uint16_t pitchV1 = static_cast<uint16_t>(std::clamp(0x5200 + shift, 0, 0xffff));
-        const uint16_t pitchV2 = static_cast<uint16_t>(std::clamp(0x51d8 + shift, 0, 0xffff));
-
-        chip.voices[v1].pmLevel = 0;
-        chip.voices[v2].pmLevel = 0;
-
-        chip.writeReg(0x60 + v1, pitchV1);
-        chip.writeReg(0x60 + v2, pitchV2);
-
-        chip.updatePitchStep(v1, pitchTable, pitchFine);
-        chip.updatePitchStep(v2, pitchTable, pitchFine);
-
-        // Reset phase counters (0x0080 for Line 1, 0x0000 for Line 2 from log)
-        chip.writeReg(0x98 + v1, 0x0080);
-        chip.writeReg(0x98 + v2, 0x0000);
-
-        // Step 1: DCA Attack (dir=0, rate=99+kOffset, sus=0, target from velocity calibration: 117..127)
-        const uint8_t dcaAttackTarget = getDcaAttackTarget(vel);
-        const uint8_t dcaAttackRate = static_cast<uint8_t>(std::clamp(99 + kOffset, 0, 127));
-        const uint16_t dcaAttackWord = static_cast<uint16_t>((dcaAttackRate << 8) | dcaAttackTarget);
-        chip.writeReg(0x00 + v1, dcaAttackWord);
-        chip.writeReg(0x00 + v2, dcaAttackWord);
-
-        // Step 1: DCW Attack (dir=0, rate=98+kOffset, sus=0, target from velocity calibration: 88..127)
-        const uint8_t dcwAttackTarget = getDcwAttackTarget(vel);
-        const uint8_t dcwAttackRate = static_cast<uint8_t>(std::clamp(98 + kOffset, 0, 127));
-        const uint16_t dcwAttackWord = static_cast<uint16_t>((dcwAttackRate << 8) | dcwAttackTarget);
-        chip.writeReg(0x20 + v1, dcwAttackWord);
-        chip.writeReg(0x20 + v2, dcwAttackWord);
-
-        // Step 1: DCO Attack (dir=0, rate=93+kOffset, sus=0, target from velocity calibration: 3..33)
-        const uint8_t dcoAttackTarget = getDcoAttackTarget(vel);
-        const uint8_t dcoAttackRate = static_cast<uint8_t>(std::clamp(93 + kOffset, 0, 127));
-        const uint16_t dcoAttackWord = static_cast<uint16_t>((dcoAttackRate << 8) | dcoAttackTarget);
-        chip.writeReg(0x10 + v1, dcoAttackWord);
-        chip.writeReg(0x10 + v2, dcoAttackWord);
-        return;
-    }
-
-    // =====================================================================
-    // PRESETS 1..63: MULTI-STEP SYSEX PRESETS
-    // =====================================================================
     const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
     const int lineMode = preset.lineMode;
     const auto& lineDef1 = preset.lines[0];
@@ -898,33 +830,6 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
     const int kOffset = v.keyRateOffset;
     const int midiNote = v.midiNote;
 
-    if (currentPresetIndex == 0)
-    {
-        // =============================================================
-        // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG RELEASE BASELINE
-        // =============================================================
-        v.dcaStage = 2;
-        const uint8_t dcaRel1Target = getDcaRelease1Target(v.velocity);
-        const uint8_t dcaRel1Rate = static_cast<uint8_t>(std::clamp(77 + kOffset, 0, 127));
-        const uint16_t dcaRel1Word = static_cast<uint16_t>((1 << 15) | (dcaRel1Rate << 8) | dcaRel1Target);
-        chip.writeReg(0x00 + v1, dcaRel1Word);
-        chip.writeReg(0x00 + v2, dcaRel1Word);
-
-        // DCW: 0xa780 (dir=1, rate=39, sus=1, target=0)
-        v.dcwStage = 3;
-        chip.writeReg(0x20 + v1, 0xa780);
-        chip.writeReg(0x20 + v2, 0xa780);
-
-        // DCO: 0xd780 (dir=1, rate=87, sus=1, target=0)
-        v.dcoStage = 2;
-        chip.writeReg(0x10 + v1, 0xd780);
-        chip.writeReg(0x10 + v2, 0xd780);
-        return;
-    }
-
-    // =============================================================
-    // PRESETS 1..63: MULTI-STEP SYSEX RELEASE
-    // =============================================================
     const int vel = v.velocity;
     const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
     const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
@@ -1093,89 +998,6 @@ void CZ1Engine::processEnvelopeSequencer()
         Upd933Chip& chip = (v.chipIndex == 0) ? chip0 : chip1;
         const int kOffset = v.keyRateOffset;
 
-        if (currentPresetIndex == 0)
-        {
-            // =================================================================
-            // PRESET 0: EXACT HARDCODED MAME CZ-1 DEBUG LOG ENVELOPE SEQUENCER
-            // =================================================================
-            if (v.dcaStage == 0) // Attack -> Decay/Sustain
-            {
-                if (chip.dca[v1].current >= chip.dca[v1].target)
-                {
-                    v.dcaStage = 1;
-                    // Step 2: Decay towards sustain (dir=1, rate=105+kOffset, sus=1, target from velocity: 116..126)
-                    const uint8_t dcaDecayTarget = getDcaSustainTarget(v.velocity);
-                    const uint8_t dcaDecayRate = static_cast<uint8_t>(std::clamp(105 + kOffset, 0, 127));
-                    const uint16_t dcaDecayWord = static_cast<uint16_t>((1 << 15) | (dcaDecayRate << 8) | (1 << 7) | dcaDecayTarget);
-                    chip.writeReg(0x00 + v1, dcaDecayWord);
-                    chip.writeReg(0x00 + v2, dcaDecayWord);
-                }
-            }
-            else if (v.dcaStage == 2) // Rel 1 -> Rel 2
-            {
-                if (chip.dca[v1].current <= chip.dca[v1].target)
-                {
-                    v.dcaStage = 3;
-                    // Release 2: dir=1, rate=67+kOffset, sus=0, target=0
-                    const uint8_t dcaRel2Rate = static_cast<uint8_t>(std::clamp(67 + kOffset, 0, 127));
-                    const uint16_t dcaRel2Word = static_cast<uint16_t>((1 << 15) | (dcaRel2Rate << 8) | 0);
-                    chip.writeReg(0x00 + v1, dcaRel2Word);
-                    chip.writeReg(0x00 + v2, dcaRel2Word);
-                }
-            }
-            else if (v.dcaStage == 3) // Rel 2 -> Idle
-            {
-                if (chip.dca[v1].current <= 0)
-                {
-                    v.dcaStage = 4;
-                    v.active = false;
-                    v.isReleased = false;
-                    chip.writeReg(0x00 + v1, 0xff80);
-                    chip.writeReg(0x00 + v2, 0xff80);
-                }
-            }
-
-            // DCW envelope sequencer
-            if (v.dcwStage == 0) // Attack -> Decay 1
-            {
-                if (chip.dcw[v1].current >= chip.dcw[v1].target)
-                {
-                    v.dcwStage = 1;
-                    // Decay 1: dir=1, rate=56, sus=0, target from velocity (55..94)
-                    const uint8_t dcwDecayTarget = getDcwDecay1Target(v.velocity);
-                    const uint16_t dcwDecayWord = static_cast<uint16_t>((1 << 15) | (56 << 8) | dcwDecayTarget);
-                    chip.writeReg(0x20 + v1, dcwDecayWord);
-                    chip.writeReg(0x20 + v2, dcwDecayWord);
-                }
-            }
-            else if (v.dcwStage == 1) // Decay 1 -> Decay 2 / Sustain
-            {
-                if (chip.dcw[v1].current <= chip.dcw[v1].target)
-                {
-                    v.dcwStage = 2;
-                    // Sustain: 0x34d1 (dir=0, rate=52, sus=1, target=81)
-                    chip.writeReg(0x20 + v1, 0x34d1);
-                    chip.writeReg(0x20 + v2, 0x34d1);
-                }
-            }
-
-            // DCO envelope sequencer
-            if (v.dcoStage == 0) // Attack -> Decay to base
-            {
-                if (chip.dco[v1].current >= chip.dco[v1].target)
-                {
-                    v.dcoStage = 1;
-                    // Decay to base: 0xd780 (dir=1, rate=87, sus=1, target=0)
-                    chip.writeReg(0x10 + v1, 0xd780);
-                    chip.writeReg(0x10 + v2, 0xd780);
-                }
-            }
-            continue;
-        }
-
-        // =====================================================================
-        // PRESETS 1..63: MULTI-STEP SYSEX ENVELOPE SEQUENCER
-        // =====================================================================
         const int vel = v.velocity;
         const int note = v.midiNote;
         const bool isReleased = v.isReleased;
@@ -1391,4 +1213,45 @@ const char* CZ1Engine::getPresetSlot(int presetIndex) const
     const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
     return CZ1_FACTORY_PRESETS[idx].slot;
 }
+
+const CZ1PresetDef& CZ1Engine::getPresetDef(int presetIndex) const
+{
+    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
+    return CZ1_FACTORY_PRESETS[idx];
+}
+
+const CZ1PresetDef& CZ1Engine::getCurrentPresetDef() const
+{
+    return getPresetDef(currentPresetIndex);
+}
+
+const char* CZ1Engine::getWaveformName(uint8_t waveIndex)
+{
+    static const char* const names[] = {
+        "Sawtooth", "Square", "Pulse", "Double Sine",
+        "Saw-Pulse", "Reso Saw", "Reso Triangle", "Reso Trapezoid"
+    };
+    return names[waveIndex & 7];
+}
+
+const char* CZ1Engine::getWindowName(uint8_t windowIndex)
+{
+    static const char* const names[] = {
+        "Off", "Sawtooth", "Triangle", "Trapezoid", "Pulse", "Double Saw", "Double Saw", "Double Saw"
+    };
+    return names[windowIndex & 7];
+}
+
+const char* CZ1Engine::getLineModeName(int8_t lineMode)
+{
+    switch (lineMode)
+    {
+        case 0: return "LINE 1 (Single Line, 8v)";
+        case 1: return "LINE 2 (Single Line, 8v)";
+        case 2: return "LINE 1+1' (Detuned Dual, 4v)";
+        case 3: return "LINE 1+2' (Distinct Dual, 4v)";
+        default: return "LINE 1";
+    }
+}
+
 

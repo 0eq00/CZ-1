@@ -127,10 +127,7 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText (juce::String (slot) + ": " + juce::String (name), lcdArea.getX() + 16, lcdArea.getY() + 14, 340, 22, juce::Justification::left);
 
     g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
-    if (curPreset == 0)
-        g.drawText ("MAME LOG CALIBRATED  |  AUTHENTIC BRASS 1", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
-    else
-        g.drawText ("PHASE DISTORTION  |  AUTHENTIC MULTI-STAGE ENV", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
+    g.drawText ("PHASE DISTORTION  |  AUTHENTIC MULTI-STAGE ENV", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
 
     const int activeVoices = audioProcessor.getEngine().getActiveVoiceCount();
     juce::String status = "VOICES: " + juce::String (activeVoices) + " / 8  |  VELOCITY SENSITIVE";
