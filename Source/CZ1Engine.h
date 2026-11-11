@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "CZ1FactoryPresets.h"
+#include "CZ1SysExParser.h"
 
 class CZ1Engine
 {
@@ -125,10 +126,17 @@ public:
 
     void loadPreset(int presetIndex);
     int getCurrentPresetIndex() const { return currentPresetIndex; }
+    int getPresetCount() const { return static_cast<int>(activePresets.size()); }
     const char* getPresetName(int presetIndex) const;
     const char* getPresetSlot(int presetIndex) const;
     const CZ1PresetDef& getPresetDef(int presetIndex) const;
     const CZ1PresetDef& getCurrentPresetDef() const;
+    const std::string& getBankName() const { return currentBankName; }
+    const std::string& getBankFormat() const { return currentBankFormat; }
+
+    bool loadSyxData(const uint8_t* data, size_t size, const std::string& bankName = "bank.syx");
+    void resetFactoryPresets();
+
     static const char* getWaveformName(uint8_t waveIndex);
     static const char* getWindowName(uint8_t windowIndex);
     static const char* getLineModeName(int8_t lineMode);
@@ -199,5 +207,8 @@ private:
     int   chorusWritePos = 0;
     float chorusPhase = 0.0f;
 
+    std::vector<CZ1PresetDef> activePresets;
+    std::string currentBankName = "CZ-1 Factory ROM";
+    std::string currentBankFormat = "CZ-1 (144 bytes)";
     int   currentPresetIndex = 0;
 };

@@ -35,8 +35,8 @@ struct PresetLine {
 
 struct CZ1PresetDef {
     int         index;
-    const char* slot;
-    const char* name;
+    char        slot[16];
+    char        name[32];
     int8_t      lineMode; // 0: Line 1, 1: Line 2, 2: Line 1+1', 3: Line 1+2'
     int8_t      octave;   // -1, 0, +1
     float       detuneSemitones;

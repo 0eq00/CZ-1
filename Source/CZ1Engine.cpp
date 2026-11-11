@@ -311,7 +311,31 @@ float CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint
 CZ1Engine::CZ1Engine()
 {
     initTables();
+    resetFactoryPresets();
     reset();
+}
+
+void CZ1Engine::resetFactoryPresets()
+{
+    activePresets.assign(CZ1_FACTORY_PRESETS, CZ1_FACTORY_PRESETS + CZ1_NUM_FACTORY_PRESETS);
+    currentBankName = "CZ-1 Factory ROM (64 Patches)";
+    currentBankFormat = "CZ-1 (144 bytes)";
+    currentPresetIndex = 0;
+    applyPresetWaveforms();
+}
+
+bool CZ1Engine::loadSyxData(const uint8_t* data, size_t size, const std::string& bankName)
+{
+    auto result = CZSysEx::parseSyx(data, size, bankName);
+    if (!result.success || result.presets.empty())
+        return false;
+
+    activePresets = std::move(result.presets);
+    currentBankName = result.bankName;
+    currentBankFormat = result.format;
+    currentPresetIndex = 0;
+    applyPresetWaveforms();
+    return true;
 }
 
 void CZ1Engine::initTables()
@@ -346,7 +370,10 @@ void CZ1Engine::reset()
 
 void CZ1Engine::applyPresetWaveforms()
 {
-    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    if (activePresets.empty())
+        return;
+
+    const auto& preset = getCurrentPresetDef();
     const int lineMode = preset.lineMode;
 
     const uint16_t wordLine1 = preset.lines[0].rawWord;
@@ -748,8 +775,7 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     const int v1 = voice.v1;
     const int v2 = voice.v2;
     Upd933Chip& chip = (voice.chipIndex == 0) ? chip0 : chip1;
-
-    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const auto& preset = getCurrentPresetDef();
     const int lineMode = preset.lineMode;
     const auto& lineDef1 = preset.lines[0];
     const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
@@ -817,7 +843,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
     if (!v.active || v.isReleased) return;
     v.isReleased = true;
 
-    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const auto& preset = getCurrentPresetDef();
     const int lineMode = preset.lineMode;
     const auto& lineDef1 = preset.lines[0];
     const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
@@ -982,7 +1008,7 @@ int CZ1Engine::getActiveVoiceCount() const
 
 void CZ1Engine::processEnvelopeSequencer()
 {
-    const auto& preset = CZ1_FACTORY_PRESETS[currentPresetIndex];
+    const auto& preset = getCurrentPresetDef();
     const int lineMode = preset.lineMode;
     const auto& lineDef1 = preset.lines[0];
     const auto& lineDef2 = (lineMode == 2) ? preset.lines[0] : preset.lines[1];
@@ -1198,26 +1224,35 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
 
 void CZ1Engine::loadPreset(int presetIndex)
 {
-    currentPresetIndex = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
+    if (activePresets.empty())
+        return;
+    currentPresetIndex = std::clamp(presetIndex, 0, static_cast<int>(activePresets.size()) - 1);
     applyPresetWaveforms();
 }
 
 const char* CZ1Engine::getPresetName(int presetIndex) const
 {
-    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
-    return CZ1_FACTORY_PRESETS[idx].name;
+    if (activePresets.empty())
+        return "Unknown";
+    const int idx = std::clamp(presetIndex, 0, static_cast<int>(activePresets.size()) - 1);
+    return activePresets[idx].name;
 }
 
 const char* CZ1Engine::getPresetSlot(int presetIndex) const
 {
-    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
-    return CZ1_FACTORY_PRESETS[idx].slot;
+    if (activePresets.empty())
+        return "U-01";
+    const int idx = std::clamp(presetIndex, 0, static_cast<int>(activePresets.size()) - 1);
+    return activePresets[idx].slot;
 }
 
 const CZ1PresetDef& CZ1Engine::getPresetDef(int presetIndex) const
 {
-    const int idx = std::clamp(presetIndex, 0, CZ1_NUM_FACTORY_PRESETS - 1);
-    return CZ1_FACTORY_PRESETS[idx];
+    static CZ1PresetDef dummy{};
+    if (activePresets.empty())
+        return dummy;
+    const int idx = std::clamp(presetIndex, 0, static_cast<int>(activePresets.size()) - 1);
+    return activePresets[idx];
 }
 
 const CZ1PresetDef& CZ1Engine::getCurrentPresetDef() const

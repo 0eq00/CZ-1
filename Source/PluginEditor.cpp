@@ -26,17 +26,12 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     chorusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         p.getVTS(), "chorus", chorusButton);
 
-    // Preset Selector Dropdown
-    presetLabel.setText ("PRESET TONE (64 ORIGINAL PATCHES)", juce::dontSendNotification);
+    // Preset Label & Dropdown
+    presetLabel.setText ("PRESET TONE", juce::dontSendNotification);
     presetLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     presetLabel.setColour (juce::Label::textColourId, juce::Colour (0xff00e5ff));
     addAndMakeVisible (presetLabel);
 
-    for (int i = 0; i < CZ1Engine::NUM_PRESETS; ++i)
-    {
-        presetSelector.addItem (juce::String (p.getEngine().getPresetSlot (i)) + "  " + p.getEngine().getPresetName (i), i + 1);
-    }
-    presetSelector.setSelectedId (p.getCurrentProgram() + 1, juce::dontSendNotification);
     presetSelector.onChange = [this]()
     {
         const int selected = presetSelector.getSelectedItemIndex();
@@ -50,6 +45,43 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     presetSelector.setColour (juce::ComboBox::textColourId, juce::Colours::white);
     presetSelector.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff00e5ff));
     addAndMakeVisible (presetSelector);
+
+    // Load .SYX Button
+    loadSyxButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff003b46));
+    loadSyxButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff00e5ff));
+    loadSyxButton.onClick = [this]()
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select Casio CZ SysEx File (.syx, .bin)",
+            juce::File::getSpecialLocation (juce::File::userHomeDirectory),
+            "*.syx;*.bin;*.SYX;*.BIN");
+
+        const auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+        fileChooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file.existsAsFile())
+            {
+                if (audioProcessor.loadSyxFile (file))
+                {
+                    refreshPresetList();
+                    repaint();
+                }
+            }
+        });
+    };
+    addAndMakeVisible (loadSyxButton);
+
+    // Reset ROM Button
+    resetRomButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232832));
+    resetRomButton.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+    resetRomButton.onClick = [this]()
+    {
+        audioProcessor.resetFactoryPresets();
+        refreshPresetList();
+        repaint();
+    };
+    addAndMakeVisible (resetRomButton);
 
     // Volume Slider
     volumeSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -68,6 +100,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     volumeLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible (volumeLabel);
 
+    refreshPresetList();
     startTimerHz (30);
 }
 
@@ -76,14 +109,81 @@ CZ1AudioProcessorEditor::~CZ1AudioProcessorEditor()
     stopTimer();
 }
 
+void CZ1AudioProcessorEditor::refreshPresetList()
+{
+    presetSelector.clear (juce::dontSendNotification);
+    const int count = audioProcessor.getEngine().getPresetCount();
+    for (int i = 0; i < count; ++i)
+    {
+        presetSelector.addItem (
+            juce::String (audioProcessor.getEngine().getPresetSlot (i)) + "  " +
+            juce::String (audioProcessor.getEngine().getPresetName (i)), i + 1);
+    }
+    presetSelector.setSelectedId (audioProcessor.getCurrentProgram() + 1, juce::dontSendNotification);
+
+    lastPresetCount = count;
+    lastBankName = juce::String (audioProcessor.getEngine().getBankName());
+
+    presetLabel.setText ("PRESET TONE (" + juce::String (count) + " TONES - " + juce::String (audioProcessor.getEngine().getBankFormat()) + ")", juce::dontSendNotification);
+}
+
 void CZ1AudioProcessorEditor::timerCallback()
 {
+    const int curPresetCount = audioProcessor.getEngine().getPresetCount();
+    const juce::String curBankName (audioProcessor.getEngine().getBankName());
+
+    if (curPresetCount != lastPresetCount || curBankName != lastBankName)
+    {
+        refreshPresetList();
+    }
+
     const int curProgram = audioProcessor.getCurrentProgram();
     if (presetSelector.getSelectedItemIndex() != curProgram)
     {
         presetSelector.setSelectedId (curProgram + 1, juce::dontSendNotification);
     }
-    repaint (220, 24, 380, 110); // Repaint LCD region for voice & preset updates
+
+    repaint (220, 24, 380, 110); // Repaint LCD region
+}
+
+bool CZ1AudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& f : files)
+    {
+        if (f.endsWithIgnoreCase (".syx") || f.endsWithIgnoreCase (".bin"))
+            return true;
+    }
+    return false;
+}
+
+void CZ1AudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
+{
+    isDraggingFile = true;
+    repaint();
+}
+
+void CZ1AudioProcessorEditor::fileDragExit (const juce::StringArray&)
+{
+    isDraggingFile = false;
+    repaint();
+}
+
+void CZ1AudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    isDraggingFile = false;
+    for (const auto& f : files)
+    {
+        if (f.endsWithIgnoreCase (".syx") || f.endsWithIgnoreCase (".bin"))
+        {
+            if (audioProcessor.loadSyxFile (juce::File (f)))
+            {
+                refreshPresetList();
+                repaint();
+                break;
+            }
+        }
+    }
+    repaint();
 }
 
 void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
@@ -124,17 +224,18 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour (0xff00e5ff));
     g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 17.0f, juce::Font::bold));
-    g.drawText (juce::String (slot) + ": " + juce::String (name), lcdArea.getX() + 16, lcdArea.getY() + 14, 340, 22, juce::Justification::left);
+    g.drawText (juce::String (slot) + ": " + juce::String (name), lcdArea.getX() + 16, lcdArea.getY() + 14, 348, 22, juce::Justification::left);
 
-    g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain));
-    g.drawText ("PHASE DISTORTION  |  AUTHENTIC MULTI-STAGE ENV", lcdArea.getX() + 16, lcdArea.getY() + 40, 340, 18, juce::Justification::left);
+    g.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::plain));
+    juce::String bankStr = "BANK: " + juce::String (audioProcessor.getEngine().getBankName()) + " [" + juce::String (audioProcessor.getEngine().getBankFormat()) + "]";
+    g.drawText (bankStr, lcdArea.getX() + 16, lcdArea.getY() + 38, 348, 18, juce::Justification::left);
 
     const int activeVoices = audioProcessor.getEngine().getActiveVoiceCount();
     juce::String status = "VOICES: " + juce::String (activeVoices) + " / 8  |  VELOCITY SENSITIVE";
-    g.drawText (status, lcdArea.getX() + 16, lcdArea.getY() + 60, 340, 18, juce::Justification::left);
+    g.drawText (status, lcdArea.getX() + 16, lcdArea.getY() + 60, 348, 18, juce::Justification::left);
 
     g.setColour (juce::Colour (0xff80deea));
-    g.drawText ("DAC: 40.0 kHz  |  KAISER SINC RESAMPLER", lcdArea.getX() + 16, lcdArea.getY() + 82, 340, 16, juce::Justification::left);
+    g.drawText ("DAC: 40.0 kHz  |  KAISER SINC RESAMPLER", lcdArea.getX() + 16, lcdArea.getY() + 82, 348, 16, juce::Justification::left);
 
     // Control Group Panel
     const juce::Rectangle<int> controlArea (20, 160, getWidth() - 40, 160);
@@ -146,7 +247,21 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
     // Group Titles
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
     g.setColour (juce::Colour (0xff00e5ff));
-    g.drawText ("SYNTHESIZER CONFIGURATION", 40, 172, 300, 20, juce::Justification::left);
+    g.drawText ("SYNTHESIZER CONFIGURATION & BANK LOADER", 40, 172, 400, 20, juce::Justification::left);
+
+    // Drag-and-drop overlay
+    if (isDraggingFile)
+    {
+        g.setColour (juce::Colour (0xcc001f24));
+        g.fillAll();
+        g.setColour (juce::Colour (0xff00e5ff));
+        g.drawRect (8, 8, getWidth() - 16, getHeight() - 16, 3);
+
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        g.drawText ("DROP CASIO CZ .SYX FILE HERE", 0, getHeight() / 2 - 30, getWidth(), 30, juce::Justification::centred);
+        g.setFont (juce::FontOptions (14.0f));
+        g.drawText ("Supports CZ-1 (144 bytes) and CZ-101 (128 bytes)", 0, getHeight() / 2 + 5, getWidth(), 24, juce::Justification::centred);
+    }
 }
 
 void CZ1AudioProcessorEditor::resized()
@@ -154,12 +269,15 @@ void CZ1AudioProcessorEditor::resized()
     const int panelY = 160;
 
     presetLabel.setBounds    (40, panelY + 38, 260, 20);
-    presetSelector.setBounds (40, panelY + 62, 260, 32);
+    presetSelector.setBounds (40, panelY + 62, 230, 32);
 
-    chorusButton.setBounds   (330, panelY + 62, 160, 32);
+    loadSyxButton.setBounds  (280, panelY + 62, 95, 32);
+    resetRomButton.setBounds (385, panelY + 62, 95, 32);
 
-    volumeSlider.setBounds (getWidth() - 140, panelY + 30, 80, 80);
-    volumeLabel.setBounds  (getWidth() - 140, panelY + 115, 80, 20);
+    chorusButton.setBounds   (495, panelY + 62, 130, 32);
+
+    volumeSlider.setBounds (getWidth() - 120, panelY + 30, 80, 80);
+    volumeLabel.setBounds  (getWidth() - 120, panelY + 115, 80, 20);
 
     keyboardComponent.setBounds (20, getHeight() - 130, getWidth() - 40, 110);
 }

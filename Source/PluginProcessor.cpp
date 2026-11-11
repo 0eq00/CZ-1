@@ -88,7 +88,7 @@ double CZ1AudioProcessor::getTailLengthSeconds() const
 
 int CZ1AudioProcessor::getNumPrograms()
 {
-    return CZ1Engine::NUM_PRESETS;
+    return engine.getPresetCount();
 }
 
 int CZ1AudioProcessor::getCurrentProgram()
@@ -213,6 +213,13 @@ void CZ1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         {
             engine.allNotesOff();
         }
+        else if (msg.isSysEx())
+        {
+            if (engine.loadSyxData (msg.getSysExData(), static_cast<size_t> (msg.getSysExDataSize()), "SysEx Dump"))
+            {
+                updateHostDisplay();
+            }
+        }
     }
 
     // Render remaining audio in the block
@@ -258,6 +265,32 @@ void CZ1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
     if (xmlState.get() != nullptr && xmlState->hasTagName (parameters.state.getType()))
         parameters.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
+
+bool CZ1AudioProcessor::loadSyxFile (const juce::File& file)
+{
+    juce::MemoryBlock mb;
+    if (file.loadFileAsData (mb))
+    {
+        return loadSyxData (mb.getData(), mb.getSize(), file.getFileName());
+    }
+    return false;
+}
+
+bool CZ1AudioProcessor::loadSyxData (const void* data, size_t size, const juce::String& name)
+{
+    const bool ok = engine.loadSyxData (static_cast<const uint8_t*> (data), size, name.toStdString());
+    if (ok)
+    {
+        updateHostDisplay();
+    }
+    return ok;
+}
+
+void CZ1AudioProcessor::resetFactoryPresets()
+{
+    engine.resetFactoryPresets();
+    updateHostDisplay();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

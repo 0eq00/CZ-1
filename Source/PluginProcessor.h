@@ -45,6 +45,10 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    bool loadSyxFile (const juce::File& file);
+    bool loadSyxData (const void* data, size_t size, const juce::String& name);
+    void resetFactoryPresets();
+
     CZ1Engine& getEngine() { return engine; }
     juce::MidiKeyboardState& getKeyboardState() { return keyboardState; }
 
