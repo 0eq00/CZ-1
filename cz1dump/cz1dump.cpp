@@ -58,8 +58,8 @@ static const char* WINDOWS[8] = {
 static const char* LINE_SELECTS[4] = {
     "Line 1 only (16 Poly)",
     "Line 2 only (16 Poly)",
-    "Line 1 + 2' (Dual Detuned, 8 Poly)",
-    "Line 1 + 1' (Double Line 1, 8 Poly)"
+    "Line 1 + 1' (Double Line 1, 8 Poly)",
+    "Line 1 + 2' (Dual Detuned, 8 Poly)"
 };
 
 static const char* VIBRATO_WAVES[4] = {

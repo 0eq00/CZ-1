@@ -93,9 +93,9 @@ namespace CZSysEx
         line.dcaKeyFollow = rawBytes[offset + 2] & 0x0f;
         line.dcwKeyFollow = rawBytes[offset + 4] & 0x0f;
 
-        line.dcaVelocity = is144 ? static_cast<uint8_t>((rawBytes[offset + 3] >> 4) & 0x0f) : 0;
-        line.dcwVelocity = is144 ? static_cast<uint8_t>(rawBytes[offset + 3] & 0x0f) : 0;
-        line.dcoVelocity = 0;
+        line.dcaVelocity = is144 ? static_cast<uint8_t>(rawBytes[offset + 6] >> 4) : 0;
+        line.dcwVelocity = is144 ? static_cast<uint8_t>(rawBytes[offset + 23] >> 4) : 0;
+        line.dcoVelocity = is144 ? static_cast<uint8_t>(rawBytes[offset + 40] >> 4) : 0;
 
         line.dca = decodeEnvelope(rawBytes, offset, 6);
         line.dcw = decodeEnvelope(rawBytes, offset, 23);

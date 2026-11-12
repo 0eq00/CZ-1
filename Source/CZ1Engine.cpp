@@ -1030,15 +1030,6 @@ void CZ1Engine::processEnvelopeSequencer()
                 {
                     // Hold sustain
                 }
-                else if (lineDef1.dca.sustain == -1 && v.line1.dcaStage == lineDef1.dca.end - 1 && lineDef1.dca.end > 1 && !isReleased)
-                {
-                    // Preset without sustain point: stays at decay stage until note-off or natural decay to silence
-                    if (chip.dca[v1].current == 0)
-                    {
-                        v.line1.finished = true;
-                        chip.writeReg(0x00 + v1, 0xff80);
-                    }
-                }
                 else if (v.line1.dcaStage < lineDef1.dca.end)
                 {
                     v.line1.dcaStage++;
@@ -1089,15 +1080,6 @@ void CZ1Engine::processEnvelopeSequencer()
                 if (v.line2.dcaStage == lineDef2.dca.sustain && !isReleased)
                 {
                     // Hold sustain
-                }
-                else if (lineDef2.dca.sustain == -1 && v.line2.dcaStage == lineDef2.dca.end - 1 && lineDef2.dca.end > 1 && !isReleased)
-                {
-                    // Preset without sustain point: stays at decay stage until note-off or natural decay to silence
-                    if (chip.dca[v2].current == 0)
-                    {
-                        v.line2.finished = true;
-                        chip.writeReg(0x00 + v2, 0xff80);
-                    }
                 }
                 else if (v.line2.dcaStage < lineDef2.dca.end)
                 {
