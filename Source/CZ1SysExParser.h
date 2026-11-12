@@ -90,6 +90,7 @@ namespace CZSysEx
     {
         PresetLine line{};
         line.rawWord = static_cast<uint16_t>((rawBytes[offset] << 8) | rawBytes[offset + 1]);
+        line.lineLevel = is144 ? static_cast<uint8_t>(std::clamp(15 - (rawBytes[offset + 2] >> 4), 1, 15)) : 15;
         line.dcaKeyFollow = rawBytes[offset + 2] & 0x0f;
         line.dcwKeyFollow = rawBytes[offset + 4] & 0x0f;
 

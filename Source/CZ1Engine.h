@@ -93,6 +93,8 @@ public:
         bool keyHeld = false;
         int  keyRateOffset = 0;
         uint64_t noteOnCounter = 0;
+        float vibratoPhase = 0.0f;
+        int   vibratoDelayCounter = 0;
     };
 
     struct Upd933Chip
@@ -126,6 +128,22 @@ public:
     bool isSustainPedalDown() const { return sustainPedal; }
     void handleControlChange(int controller, int value);
 
+    struct VibratoParams
+    {
+        int wave = 1;  // 1=Tri, 2=SawUp, 3=SawDown, 4=Square
+        int delay = 0; // 0..99
+        int rate = 50; // 0..99
+        int depth = 0; // 0..99
+    };
+
+    struct DetuneParams
+    {
+        int sign = 1;  // +1 or -1
+        int oct = 0;   // 0..3
+        int note = 0;  // 0..11
+        int fine = 0;  // 0..60
+    };
+
     void loadPreset(int presetIndex);
     int getCurrentPresetIndex() const { return currentPresetIndex; }
     int getPresetCount() const { return static_cast<int>(activePresets.size()); }
@@ -133,6 +151,13 @@ public:
     const char* getPresetSlot(int presetIndex) const;
     const CZ1PresetDef& getPresetDef(int presetIndex) const;
     const CZ1PresetDef& getCurrentPresetDef() const;
+    CZ1PresetDef& getCurrentPresetMutable();
+    const VibratoParams& getCurrentVibrato() const { return currentVibrato; }
+    VibratoParams& getCurrentVibratoMutable() { return currentVibrato; }
+    const DetuneParams& getCurrentDetune() const { return currentDetune; }
+    DetuneParams& getCurrentDetuneMutable() { return currentDetune; }
+    void updateCurrentPresetLive();
+
     const std::string& getBankName() const { return currentBankName; }
     const std::string& getBankFormat() const { return currentBankFormat; }
 
@@ -170,7 +195,9 @@ private:
     void writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
     void writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
     void triggerVoiceRelease(NoteVoice& v);
-    void applyPresetWaveforms();
+    void applyPresetWaveforms(bool resetEnvelopes = true);
+    void syncDetuneAndVibratoFromPreset();
+    static float getLineLevelScale(uint8_t lineLevel);
 
     void initTables();
     void processEnvelopeSequencer();
@@ -213,4 +240,6 @@ private:
     std::string currentBankName = "CZ-1 Factory ROM";
     std::string currentBankFormat = "CZ-1 (144 bytes)";
     int   currentPresetIndex = 0;
+    VibratoParams currentVibrato;
+    DetuneParams  currentDetune;
 };

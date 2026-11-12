@@ -50,6 +50,8 @@ public:
     void resetFactoryPresets();
 
     CZ1Engine& getEngine() { return engine; }
+    juce::CriticalSection& getEngineLock() { return engineLock; }
+    void notifyLiveEdit() { engine.updateCurrentPresetLive(); }
     juce::MidiKeyboardState& getKeyboardState() { return keyboardState; }
 
     juce::AudioProcessorValueTreeState& getVTS() { return parameters; }
@@ -58,6 +60,7 @@ private:
     CZ1Engine engine;
     CZ1Resampler resampler;
     juce::MidiKeyboardState keyboardState;
+    juce::CriticalSection engineLock;
 
     juce::AudioProcessorValueTreeState parameters;
 

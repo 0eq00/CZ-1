@@ -98,6 +98,7 @@ int CZ1AudioProcessor::getCurrentProgram()
 
 void CZ1AudioProcessor::setCurrentProgram (int index)
 {
+    const juce::ScopedLock sl (engineLock);
     engine.loadPreset (index);
 }
 
@@ -112,12 +113,14 @@ void CZ1AudioProcessor::changeProgramName (int, const juce::String&)
 
 void CZ1AudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
 {
+    const juce::ScopedLock sl (engineLock);
     resampler.prepare (CZ1Engine::NATIVE_RATE, sampleRate);
     engine.reset();
 }
 
 void CZ1AudioProcessor::releaseResources()
 {
+    const juce::ScopedLock sl (engineLock);
     resampler.reset();
     engine.allNotesOff();
 }
@@ -146,6 +149,7 @@ bool CZ1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 void CZ1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
+    const juce::ScopedLock sl (engineLock);
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
@@ -279,7 +283,11 @@ bool CZ1AudioProcessor::loadSyxFile (const juce::File& file)
 
 bool CZ1AudioProcessor::loadSyxData (const void* data, size_t size, const juce::String& name)
 {
-    const bool ok = engine.loadSyxData (static_cast<const uint8_t*> (data), size, name.toStdString());
+    bool ok = false;
+    {
+        const juce::ScopedLock sl (engineLock);
+        ok = engine.loadSyxData (static_cast<const uint8_t*> (data), size, name.toStdString());
+    }
     if (ok)
     {
         updateHostDisplay();
@@ -289,7 +297,10 @@ bool CZ1AudioProcessor::loadSyxData (const void* data, size_t size, const juce::
 
 void CZ1AudioProcessor::resetFactoryPresets()
 {
-    engine.resetFactoryPresets();
+    {
+        const juce::ScopedLock sl (engineLock);
+        engine.resetFactoryPresets();
+    }
     updateHostDisplay();
 }
 
