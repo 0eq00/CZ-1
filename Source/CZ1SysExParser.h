@@ -90,8 +90,8 @@ namespace CZSysEx
     {
         PresetLine line{};
         line.rawWord = static_cast<uint16_t>((rawBytes[offset] << 8) | rawBytes[offset + 1]);
-        line.dcaKeyFollow = rawBytes[offset + 2];
-        line.dcwKeyFollow = rawBytes[offset + 4];
+        line.dcaKeyFollow = rawBytes[offset + 2] & 0x0f;
+        line.dcwKeyFollow = rawBytes[offset + 4] & 0x0f;
 
         line.dcaVelocity = is144 ? static_cast<uint8_t>((rawBytes[offset + 3] >> 4) & 0x0f) : 0;
         line.dcwVelocity = is144 ? static_cast<uint8_t>(rawBytes[offset + 3] & 0x0f) : 0;

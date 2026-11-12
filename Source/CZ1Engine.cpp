@@ -480,8 +480,10 @@ void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
         // DCW Key Follow reduces upper harmonics on high notes (approaches pure sine wave)
         if (note > 36)
         {
-            const float rollOff = 1.0f - (keyFollow / 9.0f) * ((note - 36) / 96.0f) * 0.25f;
-            target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(target * std::max(0.65f, rollOff))), 0, 127));
+            const float kfRatio = keyFollow / 9.0f;
+            const float noteRatio = std::clamp((note - 36) / 72.0f, 0.0f, 1.0f);
+            const float rollOff = std::max(0.05f, 1.0f - kfRatio * noteRatio * 0.85f);
+            target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(target * rollOff)), 0, 127));
         }
     }
     rate = std::clamp(rate, 0u, 127u);
@@ -534,44 +536,17 @@ void CZ1Engine::writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
 int CZ1Engine::getKeyRateOffset(int midiNote)
 {
     // Authentic Casio CZ-1 Key Follow rate offsets across 88 keys
-    // Base rate is calibrated around Middle C (MIDI Key 60)
-    static constexpr int8_t OFFSET_TABLE[128] = {
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        0, 0, 0, 0, 0, 0,
-        1, 1, 1, 1, 1,
-        2, 2,
-        3, 3, 3, 3,
-        4, 4,
-        5, 5,
-        6, 6,
-        7, 7,
-        8,
-        9, 9,
-        10,
-        11, 11,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        19,
-        20,
-        21,
-        23,
-        24,
-        26,
-        27,
-        28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
-        28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
-        28, 28, 28, 28, 28, 28
-    };
+    // Calibrated directly against MAME hardware register logs:
+    // Key 21/48: 0, Key 60: 1, Key 72: 4, Key 84: 11, Key 96: 23, Key 108: 40
+    if (midiNote <= 48)
+        return 0;
 
-    if (midiNote < 0) return -1;
-    if (midiNote > 127) return 28;
-    return OFFSET_TABLE[midiNote];
+    const float x = (midiNote - 48) / 12.0f;
+    float off = x * x;
+    if (x > 2.0f)
+        off += std::pow(x - 2.0f, 2.0f) * 1.666f;
+
+    return std::min(64, static_cast<int>(std::round(off)));
 }
 
 uint8_t CZ1Engine::getDcaAttackTarget(int velocity)
@@ -813,11 +788,16 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
     const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
     const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
 
+    const int line1Note = std::clamp(midiNote + preset.octave * 12, 0, 127);
+    const int line2Note = std::clamp(static_cast<int>(std::round(midiNote + preset.octave * 12 + preset.detuneSemitones)), 0, 127);
+    voice.line1Note = line1Note;
+    voice.line2Note = line2Note;
+
     if (hasLine1)
     {
-        writeDcaStep(chip, v1, lineDef1.dca, 0, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, false);
-        writeDcwStep(chip, v1, lineDef1.dcw, 0, velScaleDcw1, lineDef1.dcwKeyFollow, midiNote, false);
-        writeDcoStep(chip, v1, lineDef1.dco, 0, velScaleDco1, 0, midiNote, false);
+        writeDcaStep(chip, v1, lineDef1.dca, 0, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, false);
+        writeDcwStep(chip, v1, lineDef1.dcw, 0, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, false);
+        writeDcoStep(chip, v1, lineDef1.dco, 0, velScaleDco1, 0, line1Note, false);
     }
     else
     {
@@ -827,9 +807,9 @@ void CZ1Engine::noteOn(int midiNote, int velocity)
 
     if (hasLine2)
     {
-        writeDcaStep(chip, v2, lineDef2.dca, 0, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, false);
-        writeDcwStep(chip, v2, lineDef2.dcw, 0, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, false);
-        writeDcoStep(chip, v2, lineDef2.dco, 0, velScaleDco2, 0, midiNote, false);
+        writeDcaStep(chip, v2, lineDef2.dca, 0, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, false);
+        writeDcwStep(chip, v2, lineDef2.dcw, 0, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, false);
+        writeDcoStep(chip, v2, lineDef2.dco, 0, velScaleDco2, 0, line2Note, false);
     }
     else
     {
@@ -865,6 +845,9 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
     const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
     const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
 
+    const int line1Note = v.line1Note;
+    const int line2Note = v.line2Note;
+
     if (hasLine1 && !v.line1.finished)
     {
         if (lineDef1.dca.sustain != -1)
@@ -877,7 +860,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line1.dcaStage = lineDef1.dca.end;
         }
         if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
-        writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, midiNote, true);
+        writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, true);
 
         if (lineDef1.dcw.sustain != -1)
         {
@@ -889,7 +872,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line1.dcwStage = lineDef1.dcw.end;
         }
         if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
-        writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw2, lineDef1.dcwKeyFollow, midiNote, true);
+        writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, true);
 
         if (lineDef1.dco.sustain != -1)
         {
@@ -901,7 +884,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line1.dcoStage = lineDef1.dco.end;
         }
         if (v.line1.dcoStage > lineDef1.dco.end) v.line1.dcoStage = lineDef1.dco.end;
-        writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, midiNote, true);
+        writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, line1Note, true);
     }
 
     if (hasLine2 && !v.line2.finished)
@@ -916,7 +899,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line2.dcaStage = lineDef2.dca.end;
         }
         if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
-        writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, midiNote, true);
+        writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, true);
 
         if (lineDef2.dcw.sustain != -1)
         {
@@ -928,7 +911,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line2.dcwStage = lineDef2.dcw.end;
         }
         if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
-        writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, midiNote, true);
+        writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, true);
 
         if (lineDef2.dco.sustain != -1)
         {
@@ -940,7 +923,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line2.dcoStage = lineDef2.dco.end;
         }
         if (v.line2.dcoStage > lineDef2.dco.end) v.line2.dcoStage = lineDef2.dco.end;
-        writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, midiNote, true);
+        writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, line2Note, true);
     }
 }
 
@@ -1026,6 +1009,8 @@ void CZ1Engine::processEnvelopeSequencer()
 
         const int vel = v.velocity;
         const int note = v.midiNote;
+        const int line1Note = v.line1Note;
+        const int line2Note = v.line2Note;
         const bool isReleased = v.isReleased;
 
         const float velScaleDca1 = 1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f);
@@ -1057,7 +1042,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line1.dcaStage < lineDef1.dca.end)
                 {
                     v.line1.dcaStage++;
-                    writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, note, isReleased);
+                    writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, isReleased);
                 }
                 else
                 {
@@ -1078,7 +1063,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line1.dcwStage < lineDef1.dcw.end)
                 {
                     v.line1.dcwStage++;
-                    writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, note, isReleased);
+                    writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, isReleased);
                 }
             }
 
@@ -1091,7 +1076,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line1.dcoStage < lineDef1.dco.end)
                 {
                     v.line1.dcoStage++;
-                    writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, note, isReleased);
+                    writeDcoStep(chip, v1, lineDef1.dco, v.line1.dcoStage, velScaleDco1, 0, line1Note, isReleased);
                 }
             }
         }
@@ -1117,7 +1102,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line2.dcaStage < lineDef2.dca.end)
                 {
                     v.line2.dcaStage++;
-                    writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, note, isReleased);
+                    writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, isReleased);
                 }
                 else
                 {
@@ -1138,7 +1123,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line2.dcwStage < lineDef2.dcw.end)
                 {
                     v.line2.dcwStage++;
-                    writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, note, isReleased);
+                    writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, isReleased);
                 }
             }
 
@@ -1151,7 +1136,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line2.dcoStage < lineDef2.dco.end)
                 {
                     v.line2.dcoStage++;
-                    writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, note, isReleased);
+                    writeDcoStep(chip, v2, lineDef2.dco, v.line2.dcoStage, velScaleDco2, 0, line2Note, isReleased);
                 }
             }
         }

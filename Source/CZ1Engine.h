@@ -74,6 +74,8 @@ public:
     struct NoteVoice
     {
         int  midiNote = -1;
+        int  line1Note = 60;
+        int  line2Note = 60;
         int  velocity = 0;
         bool active = false;
         int  pairIndex = 0;

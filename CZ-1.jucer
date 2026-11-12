@@ -6,6 +6,8 @@
               pluginCharacteristicsValue="pluginIsSynth,pluginProducesMidiOut,pluginWantsMidiIn">
   <MAINGROUP id="qaLMcw" name="CZ-1">
     <GROUP id="{0DCC52D5-E0B5-7013-1E2D-0A90765C2CA6}" name="Source">
+      <FILE id="JfLGLV" name="CZ1SysExParser.h" compile="0" resource="0"
+            file="Source/CZ1SysExParser.h"/>
       <FILE id="e7rMNr" name="CZ1FactoryPresets.h" compile="0" resource="0"
             file="Source/CZ1FactoryPresets.h"/>
       <FILE id="GqPggO" name="CZ1Engine.cpp" compile="1" resource="0" file="Source/CZ1Engine.cpp"/>
