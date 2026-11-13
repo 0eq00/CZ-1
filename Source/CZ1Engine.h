@@ -128,13 +128,7 @@ public:
     bool isSustainPedalDown() const { return sustainPedal; }
     void handleControlChange(int controller, int value);
 
-    struct VibratoParams
-    {
-        int wave = 1;  // 1=Tri, 2=SawUp, 3=SawDown, 4=Square
-        int delay = 0; // 0..99
-        int rate = 50; // 0..99
-        int depth = 0; // 0..99
-    };
+    using VibratoParams = CZSysEx::VibratoDef;
 
     struct DetuneParams
     {
@@ -163,6 +157,7 @@ public:
 
     bool loadSyxData(const uint8_t* data, size_t size, const std::string& bankName = "bank.syx");
     void resetFactoryPresets();
+    std::vector<uint8_t> exportBankToSyx() const;
 
     static const char* getWaveformName(uint8_t waveIndex);
     static const char* getWindowName(uint8_t windowIndex);
@@ -237,6 +232,7 @@ private:
     float chorusPhase = 0.0f;
 
     std::vector<CZ1PresetDef> activePresets;
+    std::vector<CZSysEx::VibratoDef> presetVibratos;
     std::string currentBankName = "CZ-1 Factory ROM";
     std::string currentBankFormat = "CZ-1 (144 bytes)";
     int   currentPresetIndex = 0;

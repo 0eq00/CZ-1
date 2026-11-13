@@ -99,6 +99,7 @@ private:
     juce::ComboBox     presetSelector;
     juce::Label        presetLabel;
     juce::TextButton   loadSyxButton  { "Load .SYX" };
+    juce::TextButton   saveSyxButton  { "Save .SYX" };
     juce::TextButton   resetRomButton { "Reset ROM" };
     juce::Slider       volumeSlider;
     juce::Label        volumeLabel;

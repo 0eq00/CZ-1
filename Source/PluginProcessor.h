@@ -47,6 +47,7 @@ public:
 
     bool loadSyxFile (const juce::File& file);
     bool loadSyxData (const void* data, size_t size, const juce::String& name);
+    bool saveSyxBankToFile (const juce::File& file);
     void resetFactoryPresets();
 
     CZ1Engine& getEngine() { return engine; }

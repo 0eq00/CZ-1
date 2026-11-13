@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -21,6 +22,53 @@
 
 namespace CZSysEx
 {
+    struct VibratoDef
+    {
+        int wave = 1;  // 1=Tri, 2=SawUp, 3=SawDown, 4=Square
+        int delay = 0; // 0..99
+        int rate = 50; // 0..99
+        int depth = 0; // 0..99
+    };
+
+    inline constexpr uint16_t kVibDelayWords[100] = {
+        0x0000,0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,0x0009,
+        0x000A,0x000B,0x000C,0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,
+        0x0014,0x0015,0x0016,0x0017,0x0018,0x0019,0x001A,0x001B,0x001C,0x001D,
+        0x001E,0x001F,0x0021,0x0023,0x0025,0x0027,0x0029,0x002B,0x002D,0x002F,
+        0x0031,0x0033,0x0035,0x0037,0x0039,0x003B,0x003D,0x003F,0x0043,0x0047,
+        0x004B,0x004F,0x0053,0x0057,0x005B,0x005F,0x0063,0x0067,0x006B,0x006F,
+        0x0073,0x0077,0x007B,0x007F,0x0087,0x008F,0x0097,0x009F,0x00A7,0x00AF,
+        0x00B7,0x00BF,0x00C7,0x00CF,0x00D7,0x00DF,0x00E7,0x00EF,0x00F7,0x00FF,
+        0x010F,0x011F,0x012F,0x013F,0x014F,0x015F,0x016F,0x017F,0x018F,0x019F,
+        0x01AF,0x01BF,0x01CF,0x01DF,0x01EF,0x01FF,0x021F,0x023F,0x025F,0x027F
+    };
+
+    inline constexpr uint16_t kVibRateWords[100] = {
+        0x0020,0x0040,0x0060,0x0080,0x00A0,0x00C0,0x00E0,0x0000,0x0120,0x0140,
+        0x0160,0x0180,0x01A0,0x01C0,0x01E0,0x0200,0x0220,0x0240,0x0260,0x0280,
+        0x02A0,0x02C0,0x03E0,0x0300,0x0320,0x0340,0x0360,0x0380,0x03A0,0x03C0,
+        0x03E0,0x0400,0x0460,0x04A0,0x04E0,0x0520,0x0560,0x05A0,0x05E0,0x0620,
+        0x0660,0x06A0,0x06E0,0x0720,0x0760,0x07A0,0x07E0,0x0820,0x08E0,0x0960,
+        0x09E0,0x0A60,0x0AE0,0x0B60,0x0BE0,0x0C60,0x0CE0,0x0D60,0x0DE0,0x0E60,
+        0x0EE0,0x0F60,0x0FE0,0x1060,0x11E0,0x12E0,0x13E0,0x14E0,0x15E0,0x16E0,
+        0x17E0,0x18E0,0x19E0,0x1AE0,0x1BE0,0x1CE0,0x1DE0,0x1EE0,0x1FE0,0x20E0,
+        0x23E0,0x25E0,0x27E0,0x29E0,0x2BE0,0x2DE0,0x2FE0,0x31E0,0x33E0,0x35E0,
+        0x37E0,0x39E0,0x3BE0,0x3DE0,0x3FE0,0x41E0,0x47E0,0x4BE0,0x4FE0,0x53E0
+    };
+
+    inline constexpr uint16_t kVibDepthWords[100] = {
+        0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,0x0009,0x000A,
+        0x000B,0x000C,0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,0x0014,
+        0x0015,0x0016,0x0017,0x0018,0x0019,0x001A,0x001B,0x001C,0x001D,0x001E,
+        0x001F,0x0020,0x0023,0x0025,0x0027,0x0029,0x002B,0x002D,0x002F,0x0031,
+        0x0033,0x0035,0x0037,0x0039,0x003B,0x003D,0x003F,0x0041,0x0047,0x004B,
+        0x004F,0x0053,0x0057,0x005B,0x005F,0x0063,0x0067,0x006B,0x006F,0x0073,
+        0x0077,0x007B,0x007F,0x0083,0x008F,0x0097,0x009F,0x00A7,0x00AF,0x00B7,
+        0x00BF,0x00C7,0x00CF,0x00D7,0x00DF,0x00E7,0x00EF,0x00F7,0x00FF,0x0107,
+        0x011F,0x012F,0x013F,0x014F,0x015F,0x016F,0x017F,0x018F,0x019F,0x01AF,
+        0x01BF,0x01CF,0x01DF,0x01EF,0x01FF,0x020F,0x023F,0x025F,0x027F,0x0300
+    };
+
     static const char* const CZ101_FACTORY_NAMES[4][16] = {
         // Bank 1
         {
@@ -183,12 +231,135 @@ namespace CZSysEx
         return p;
     }
 
+    inline VibratoDef decodeVibrato(const uint8_t* rawBytes)
+    {
+        VibratoDef v{};
+        if (rawBytes[4] & 0x20) v.wave = 3;      // Saw Down
+        else if (rawBytes[4] & 0x04) v.wave = 2; // Saw Up
+        else if (rawBytes[4] & 0x02) v.wave = 4; // Square
+        else v.wave = 1;                         // Triangle (0x08)
+
+        v.delay = std::clamp(static_cast<int>(rawBytes[5]), 0, 99);
+        v.rate  = std::clamp(static_cast<int>(rawBytes[8]), 0, 99);
+        v.depth = std::clamp(static_cast<int>(rawBytes[11]), 0, 99);
+        return v;
+    }
+
+    inline std::array<uint8_t, 144> encodeCZPatchTo144Bytes(const CZ1PresetDef& preset, const VibratoDef& vib = {})
+    {
+        std::array<uint8_t, 144> bytes{};
+        bytes.fill(0);
+
+        const int octCode = (preset.octave == 1) ? 1 : ((preset.octave == -1) ? 2 : 0);
+        bytes[0] = static_cast<uint8_t>((preset.lineMode & 3) | (octCode << 2));
+
+        // Bytes 1..3: Detune
+        bytes[1] = (preset.detuneSemitones < 0.0f) ? 1 : 0;
+        const float absSt = std::abs(preset.detuneSemitones);
+        const int totalNote = std::clamp(static_cast<int>(std::floor(absSt + 1e-4f)), 0, 47);
+        int hwFine = std::clamp(static_cast<int>(std::round((absSt - totalNote) * 60.0f)), 0, 60);
+        if (hwFine >= 48) hwFine += 3;
+        else if (hwFine >= 32) hwFine += 2;
+        else if (hwFine >= 16) hwFine += 1;
+        bytes[2] = static_cast<uint8_t>((hwFine & 0x3f) << 2);
+        bytes[3] = static_cast<uint8_t>(totalNote);
+
+        // Bytes 4..13: Vibrato
+        const uint8_t vibFlag = (vib.wave == 2) ? 0x04 : (vib.wave == 3 ? 0x20 : (vib.wave == 4 ? 0x02 : 0x08));
+        bytes[4] = vibFlag;
+        const int dIdx = std::clamp(vib.delay, 0, 99);
+        const int rIdx = std::clamp(vib.rate, 0, 99);
+        const int depIdx = std::clamp(vib.depth, 0, 99);
+        bytes[5]  = static_cast<uint8_t>(dIdx);
+        bytes[6]  = static_cast<uint8_t>(kVibDelayWords[dIdx] & 0xff);
+        bytes[7]  = static_cast<uint8_t>((kVibDelayWords[dIdx] >> 8) & 0xff);
+        bytes[8]  = static_cast<uint8_t>(rIdx);
+        bytes[9]  = static_cast<uint8_t>(kVibRateWords[rIdx] & 0xff);
+        bytes[10] = static_cast<uint8_t>((kVibRateWords[rIdx] >> 8) & 0xff);
+        bytes[11] = static_cast<uint8_t>(depIdx);
+        bytes[12] = static_cast<uint8_t>(kVibDepthWords[depIdx] & 0xff);
+        bytes[13] = static_cast<uint8_t>((kVibDepthWords[depIdx] >> 8) & 0xff);
+
+        auto writeLine = [&bytes](int offset, const PresetLine& line)
+        {
+            bytes[offset]     = static_cast<uint8_t>((line.rawWord >> 8) & 0xff);
+            bytes[offset + 1] = static_cast<uint8_t>(line.rawWord & 0xff);
+            const int lvl = (line.lineLevel == 0) ? 15 : std::clamp(static_cast<int>(line.lineLevel), 1, 15);
+            const uint8_t lvlNib = static_cast<uint8_t>(std::clamp(15 - lvl, 0, 15));
+            bytes[offset + 2] = static_cast<uint8_t>((lvlNib << 4) | (line.dcaKeyFollow & 0x0f));
+            bytes[offset + 3] = 0;
+            bytes[offset + 4] = static_cast<uint8_t>(line.dcwKeyFollow & 0x0f);
+            bytes[offset + 5] = 0;
+
+            auto writeEnv = [&bytes, offset](int envOff, const EnvelopeDef& env, uint8_t vel)
+            {
+                bytes[offset + envOff] = static_cast<uint8_t>(((vel & 0x0f) << 4) | (env.end & 0x07));
+                for (int s = 0; s < 8; ++s)
+                {
+                    const auto& st = env.steps[s];
+                    const bool isSus = (env.sustain == s) || (env.sustain == -1 && st.sustain);
+                    bytes[offset + envOff + 1 + s * 2]     = static_cast<uint8_t>(st.rate & 0x7f);
+                    bytes[offset + envOff + 1 + s * 2 + 1] = static_cast<uint8_t>((st.level & 0x7f) | (isSus ? 0x80 : 0));
+                }
+            };
+
+            writeEnv(6,  line.dca, line.dcaVelocity);
+            writeEnv(23, line.dcw, line.dcwVelocity);
+            writeEnv(40, line.dco, line.dcoVelocity);
+        };
+
+        writeLine(14, preset.lines[0]);
+        writeLine(71, preset.lines[1]);
+
+        // Bytes 128..143: 16-byte ASCII name
+        std::string pname(preset.name);
+        while (pname.size() < 16) pname.push_back(' ');
+        for (int i = 0; i < 16; ++i)
+        {
+            const unsigned char ch = static_cast<unsigned char>(pname[static_cast<size_t>(i)]);
+            bytes[128 + i] = (ch >= 32 && ch <= 126) ? ch : ' ';
+        }
+
+        return bytes;
+    }
+
+    inline std::vector<uint8_t> encodeBankToSyx(const std::vector<CZ1PresetDef>& presets, const std::vector<VibratoDef>& vibratos)
+    {
+        std::vector<uint8_t> out;
+        out.reserve(presets.size() * 296);
+
+        for (size_t i = 0; i < presets.size(); ++i)
+        {
+            const VibratoDef vib = (i < vibratos.size()) ? vibratos[i] : VibratoDef{};
+            const auto raw144 = encodeCZPatchTo144Bytes(presets[i], vib);
+            const uint8_t slotByte = static_cast<uint8_t>(0x20 + (i & 0x3f));
+
+            out.push_back(0xf0);
+            out.push_back(0x44);
+            out.push_back(0x00);
+            out.push_back(0x00);
+            out.push_back(0x70);
+            out.push_back(0x20);
+            out.push_back(slotByte);
+
+            for (size_t b = 0; b < 144; ++b)
+            {
+                out.push_back(static_cast<uint8_t>(raw144[b] & 0x0f));
+                out.push_back(static_cast<uint8_t>((raw144[b] >> 4) & 0x0f));
+            }
+            out.push_back(0xf7);
+        }
+
+        return out;
+    }
+
     struct SysExParseResult
     {
         bool success = false;
         std::string format = "Unknown";
         std::string bankName;
         std::vector<CZ1PresetDef> presets;
+        std::vector<VibratoDef> vibratos;
         std::string errorMessage;
     };
 
@@ -288,6 +459,7 @@ namespace CZSysEx
                             std::snprintf(slot, sizeof(slot), "%c-%d", bankLetter, toneNum);
 
                             res.presets.push_back(decodeCZPatch(rawBytes.data(), rawBytes.size(), patchIdx, slot, fallback));
+                            res.vibratos.push_back(decodeVibrato(rawBytes.data()));
                         }
                     }
                     continue;
@@ -311,6 +483,7 @@ namespace CZSysEx
                     int toneNum = static_cast<int>((i % 8) + 1);
                     std::snprintf(slot, sizeof(slot), "%c-%d", bankLetter, toneNum);
                     res.presets.push_back(decodeCZPatch(rawBytes, 144, static_cast<int>(i), slot));
+                    res.vibratos.push_back(decodeVibrato(rawBytes));
                 }
             }
             else if (size % 128 == 0)
@@ -331,6 +504,7 @@ namespace CZSysEx
                         fallback = CZ101_FACTORY_NAMES[bankHint][i];
                     }
                     res.presets.push_back(decodeCZPatch(rawBytes, 128, static_cast<int>(i), slot, fallback));
+                    res.vibratos.push_back(decodeVibrato(rawBytes));
                 }
             }
         }

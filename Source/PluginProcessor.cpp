@@ -295,6 +295,32 @@ bool CZ1AudioProcessor::loadSyxData (const void* data, size_t size, const juce::
     return ok;
 }
 
+bool CZ1AudioProcessor::saveSyxBankToFile (const juce::File& file)
+{
+    // Enforce strict no-overwrite policy: only create brand-new files
+    if (file == juce::File() || file.exists())
+        return false;
+
+    std::vector<uint8_t> syxBytes;
+    {
+        const juce::ScopedLock sl (engineLock);
+        syxBytes = engine.exportBankToSyx();
+    }
+
+    if (syxBytes.empty() || file.exists())
+        return false;
+
+    juce::FileOutputStream stream (file);
+    if (!stream.openedOk())
+        return false;
+
+    if (!stream.write (syxBytes.data(), syxBytes.size()))
+        return false;
+
+    stream.flush();
+    return !stream.getStatus().failed();
+}
+
 void CZ1AudioProcessor::resetFactoryPresets()
 {
     {

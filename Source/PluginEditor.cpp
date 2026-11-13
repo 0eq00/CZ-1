@@ -140,9 +140,9 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
 {
     setSize (1020, 640);
 
-    // Keyboard
-    keyboardComponent.setAvailableRange (36, 96);
-    keyboardComponent.setKeyWidth (24.0f);
+    // Keyboard (Full 88-key A0..C8 piano range)
+    keyboardComponent.setAvailableRange (21, 108);
+    keyboardComponent.setKeyWidth (18.8f);
     addAndMakeVisible (keyboardComponent);
 
     // Chorus toggle
@@ -197,6 +197,61 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
         });
     };
     addAndMakeVisible (loadSyxButton);
+
+    saveSyxButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff064e3b));
+    saveSyxButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff6ee7b7));
+    saveSyxButton.onClick = [this]()
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+        juce::File defaultFile = dir.getChildFile ("CZ1_Bank.syx");
+        for (int n = 1; n < 1000 && defaultFile.exists(); ++n)
+            defaultFile = dir.getChildFile ("CZ1_Bank_" + juce::String (n).paddedLeft ('0', 2) + ".syx");
+
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Save Casio CZ SysEx Bank as New File (.syx)",
+            defaultFile,
+            "*.syx;*.SYX");
+
+        const auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+        fileChooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file == juce::File())
+                return;
+
+            if (!file.hasFileExtension (".syx") && !file.hasFileExtension (".SYX") && !file.hasFileExtension (".bin"))
+                file = file.withFileExtension (".syx");
+
+            // Strictly prohibit overwriting any existing file
+            if (file.exists())
+            {
+                flashLine1 = "   SAVE ERROR   ";
+                flashLine2 = "FILE EXISTS!    ";
+                flashTicks = 45;
+                repaint();
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Save .SYX",
+                    "Cannot overwrite an existing file. Please specify a new file name.");
+                return;
+            }
+
+            if (audioProcessor.saveSyxBankToFile (file))
+            {
+                flashLine1 = "  BANK SAVED!   ";
+                flashLine2 = file.getFileName().toUpperCase().substring (0, 16);
+                flashTicks = 35;
+            }
+            else
+            {
+                flashLine1 = "   SAVE ERROR   ";
+                flashLine2 = "WRITE FAILED!   ";
+                flashTicks = 35;
+            }
+            repaint();
+        });
+    };
+    addAndMakeVisible (saveSyxButton);
 
     resetRomButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232832));
     resetRomButton.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
@@ -1101,14 +1156,9 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect (0, 4, getWidth(), 3);
 
     // Header Logo
-    g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("CASIO", 20, 18, 86, 26, juce::Justification::left);
     g.setColour (juce::Colour (0xff00e5ff));
-    g.drawText ("CZ-1", 104, 18, 70, 26, juce::Justification::left);
-    g.setColour (juce::Colour (0xff94a3b8));
-    g.setFont (juce::FontOptions (10.5f));
-    g.drawText ("DIGITAL SYNTHESIZER · NEC uPD933", 20, 44, 240, 16, juce::Justification::left);
+    g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
+    g.drawText ("CZ-1", 20, 26, 80, 30, juce::Justification::left);
 
     // Header Panel Separator
     g.setColour (juce::Colour (0xff262b36));
@@ -1309,13 +1359,14 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
 void CZ1AudioProcessorEditor::resized()
 {
     // Top Header Controls
-    presetLabel.setBounds    (270, 16, 260, 18);
-    presetSelector.setBounds (270, 36, 240, 28);
-    loadSyxButton.setBounds  (520, 36, 86, 28);
-    resetRomButton.setBounds (614, 36, 86, 28);
-    chorusButton.setBounds   (714, 36, 120, 28);
-    volumeLabel.setBounds    (842, 16, 158, 16);
-    volumeSlider.setBounds   (842, 36, 158, 28);
+    presetLabel.setBounds    (112, 16, 256, 18);
+    presetSelector.setBounds (112, 36, 256, 28);
+    loadSyxButton.setBounds  (376, 36, 86, 28);
+    saveSyxButton.setBounds  (470, 36, 86, 28);
+    resetRomButton.setBounds (564, 36, 86, 28);
+    chorusButton.setBounds   (662, 36, 124, 28);
+    volumeLabel.setBounds    (798, 16, 202, 16);
+    volumeSlider.setBounds   (798, 36, 202, 28);
 
     // DATA ENTRY SECTION Buttons
     homeLcdBtn.setBounds  (282, 103, 66, 20);

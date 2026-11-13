@@ -16,45 +16,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-static const uint16_t kVibDelayWords[100] = {
-    0x0000,0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,0x0009,
-    0x000A,0x000B,0x000C,0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,
-    0x0014,0x0015,0x0016,0x0017,0x0018,0x0019,0x001A,0x001B,0x001C,0x001D,
-    0x001E,0x001F,0x0021,0x0023,0x0025,0x0027,0x0029,0x002B,0x002D,0x002F,
-    0x0031,0x0033,0x0035,0x0037,0x0039,0x003B,0x003D,0x003F,0x0043,0x0047,
-    0x004B,0x004F,0x0053,0x0057,0x005B,0x005F,0x0063,0x0067,0x006B,0x006F,
-    0x0073,0x0077,0x007B,0x007F,0x0087,0x008F,0x0097,0x009F,0x00A7,0x00AF,
-    0x00B7,0x00BF,0x00C7,0x00CF,0x00D7,0x00DF,0x00E7,0x00EF,0x00F7,0x00FF,
-    0x010F,0x011F,0x012F,0x013F,0x014F,0x015F,0x016F,0x017F,0x018F,0x019F,
-    0x01AF,0x01BF,0x01CF,0x01DF,0x01EF,0x01FF,0x021F,0x023F,0x025F,0x027F
-};
-
-static const uint16_t kVibRateWords[100] = {
-    0x0020,0x0040,0x0060,0x0080,0x00A0,0x00C0,0x00E0,0x0000,0x0120,0x0140,
-    0x0160,0x0180,0x01A0,0x01C0,0x01E0,0x0200,0x0220,0x0240,0x0260,0x0280,
-    0x02A0,0x02C0,0x03E0,0x0300,0x0320,0x0340,0x0360,0x0380,0x03A0,0x03C0,
-    0x03E0,0x0400,0x0460,0x04A0,0x04E0,0x0520,0x0560,0x05A0,0x05E0,0x0620,
-    0x0660,0x06A0,0x06E0,0x0720,0x0760,0x07A0,0x07E0,0x0820,0x08E0,0x0960,
-    0x09E0,0x0A60,0x0AE0,0x0B60,0x0BE0,0x0C60,0x0CE0,0x0D60,0x0DE0,0x0E60,
-    0x0EE0,0x0F60,0x0FE0,0x1060,0x11E0,0x12E0,0x13E0,0x14E0,0x15E0,0x16E0,
-    0x17E0,0x18E0,0x19E0,0x1AE0,0x1BE0,0x1CE0,0x1DE0,0x1EE0,0x1FE0,0x20E0,
-    0x23E0,0x25E0,0x27E0,0x29E0,0x2BE0,0x2DE0,0x2FE0,0x31E0,0x33E0,0x35E0,
-    0x37E0,0x39E0,0x3BE0,0x3DE0,0x3FE0,0x41E0,0x47E0,0x4BE0,0x4FE0,0x53E0
-};
-
-static const uint16_t kVibDepthWords[100] = {
-    0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,0x0009,0x000A,
-    0x000B,0x000C,0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,0x0014,
-    0x0015,0x0016,0x0017,0x0018,0x0019,0x001A,0x001B,0x001C,0x001D,0x001E,
-    0x001F,0x0020,0x0023,0x0025,0x0027,0x0029,0x002B,0x002D,0x002F,0x0031,
-    0x0033,0x0035,0x0037,0x0039,0x003B,0x003D,0x003F,0x0041,0x0047,0x004B,
-    0x004F,0x0053,0x0057,0x005B,0x005F,0x0063,0x0067,0x006B,0x006F,0x0073,
-    0x0077,0x007B,0x007F,0x0083,0x008F,0x0097,0x009F,0x00A7,0x00AF,0x00B7,
-    0x00BF,0x00C7,0x00CF,0x00D7,0x00DF,0x00E7,0x00EF,0x00F7,0x00FF,0x0107,
-    0x011F,0x012F,0x013F,0x014F,0x015F,0x016F,0x017F,0x018F,0x019F,0x01AF,
-    0x01BF,0x01CF,0x01DF,0x01EF,0x01FF,0x020F,0x023F,0x025F,0x027F,0x0300
-};
-
 void CZ1Engine::Envelope::update()
 {
     if (current != target)
@@ -357,6 +318,7 @@ CZ1Engine::CZ1Engine()
 void CZ1Engine::resetFactoryPresets()
 {
     activePresets.assign(CZ1_FACTORY_PRESETS, CZ1_FACTORY_PRESETS + CZ1_NUM_FACTORY_PRESETS);
+    presetVibratos.assign(activePresets.size(), CZSysEx::VibratoDef{});
     currentBankName = "CZ-1 Factory ROM (64 Patches)";
     currentBankFormat = "CZ-1 (144 bytes)";
     currentPresetIndex = 0;
@@ -371,12 +333,23 @@ bool CZ1Engine::loadSyxData(const uint8_t* data, size_t size, const std::string&
         return false;
 
     activePresets = std::move(result.presets);
+    presetVibratos = std::move(result.vibratos);
+    presetVibratos.resize(activePresets.size());
     currentBankName = result.bankName;
     currentBankFormat = result.format;
     currentPresetIndex = 0;
     syncDetuneAndVibratoFromPreset();
     applyPresetWaveforms(true);
     return true;
+}
+
+std::vector<uint8_t> CZ1Engine::exportBankToSyx() const
+{
+    std::vector<CZSysEx::VibratoDef> vibs = presetVibratos;
+    vibs.resize(activePresets.size());
+    if (currentPresetIndex >= 0 && currentPresetIndex < static_cast<int>(vibs.size()))
+        vibs[static_cast<size_t>(currentPresetIndex)] = currentVibrato;
+    return CZSysEx::encodeBankToSyx(activePresets, vibs);
 }
 
 void CZ1Engine::initTables()
@@ -424,7 +397,10 @@ void CZ1Engine::syncDetuneAndVibratoFromPreset()
     currentDetune.oct = std::clamp(totalNote / 12, 0, 3);
     currentDetune.note = std::clamp(totalNote % 12, 0, 11);
     currentDetune.fine = std::clamp(static_cast<int>(std::round((absSt - totalNote) * 60.0f)), 0, 60);
-    currentVibrato = VibratoParams();
+    if (currentPresetIndex >= 0 && currentPresetIndex < static_cast<int>(presetVibratos.size()))
+        currentVibrato = presetVibratos[static_cast<size_t>(currentPresetIndex)];
+    else
+        currentVibrato = VibratoParams();
 }
 
 void CZ1Engine::updateCurrentPresetLive()
@@ -434,6 +410,8 @@ void CZ1Engine::updateCurrentPresetLive()
         auto& preset = getCurrentPresetMutable();
         const int totalCoarse = currentDetune.oct * 12 + currentDetune.note;
         preset.detuneSemitones = static_cast<float>(currentDetune.sign) * (totalCoarse + currentDetune.fine / 60.0f);
+        if (currentPresetIndex >= 0 && currentPresetIndex < static_cast<int>(presetVibratos.size()))
+            presetVibratos[static_cast<size_t>(currentPresetIndex)] = currentVibrato;
     }
     applyPresetWaveforms(false);
 }
@@ -1111,7 +1089,7 @@ void CZ1Engine::processEnvelopeSequencer()
             const int dIdx = std::clamp(currentVibrato.delay, 0, 99);
             const int rIdx = std::clamp(currentVibrato.rate, 0, 99);
             const int depIdx = std::clamp(currentVibrato.depth, 0, 99);
-            const int delaySteps = static_cast<int>(kVibDelayWords[dIdx] * 8);
+            const int delaySteps = static_cast<int>(CZSysEx::kVibDelayWords[dIdx] * 8);
 
             if (v.vibratoDelayCounter < delaySteps)
             {
@@ -1119,7 +1097,7 @@ void CZ1Engine::processEnvelopeSequencer()
             }
             else
             {
-                const float rateHz = 0.25f + (static_cast<float>(kVibRateWords[rIdx]) / 21472.0f) * 14.0f;
+                const float rateHz = 0.25f + (static_cast<float>(CZSysEx::kVibRateWords[rIdx]) / 21472.0f) * 14.0f;
                 v.vibratoPhase = std::fmod(v.vibratoPhase + rateHz * (64.0f / static_cast<float>(NATIVE_RATE)), 1.0f);
 
                 float lfo = 0.0f;
@@ -1131,7 +1109,7 @@ void CZ1Engine::processEnvelopeSequencer()
                     default: lfo = (v.vibratoPhase < 0.5f) ? 1.0f : -1.0f; break;       // Square
                 }
 
-                const float maxCents = (static_cast<float>(kVibDepthWords[depIdx]) / 768.0f) * 200.0f;
+                const float maxCents = (static_cast<float>(CZSysEx::kVibDepthWords[depIdx]) / 768.0f) * 200.0f;
                 const int vibPitchOffset = static_cast<int>(std::round((lfo * maxCents / 100.0f) * 512.0f));
 
                 const int baseOctShift = preset.octave * 12 * 512;
