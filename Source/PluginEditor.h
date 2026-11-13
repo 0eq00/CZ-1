@@ -23,6 +23,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
+    bool keyPressed (const juce::KeyPress& key) override;
+    void mouseDown (const juce::MouseEvent& event) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void fileDragEnter (const juce::StringArray& files, int x, int y) override;
@@ -90,6 +92,7 @@ private:
     void onInitClicked();
     void drawLed (juce::Graphics& g, juce::Rectangle<int> bounds, bool lit, juce::Colour litColour = juce::Colour (0xffef4444));
     void styleButton (juce::TextButton& btn, bool active = false);
+    void syncKeyboardFocusForScreen();
 
     CZ1AudioProcessor& audioProcessor;
     juce::MidiKeyboardComponent keyboardComponent;

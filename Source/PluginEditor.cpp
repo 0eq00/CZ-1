@@ -139,6 +139,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
       keyboardComponent (p.getKeyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     setSize (1020, 640);
+    setWantsKeyboardFocus (true);
 
     // Keyboard (Full 88-key A0..C8 piano range)
     keyboardComponent.setAvailableRange (21, 108);
@@ -148,6 +149,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     // Chorus toggle
     chorusButton.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
     chorusButton.setColour (juce::ToggleButton::tickColourId, juce::Colour (0xff00e5ff));
+    chorusButton.setWantsKeyboardFocus (false);
     addAndMakeVisible (chorusButton);
     chorusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         p.getVTS(), "chorus", chorusButton);
@@ -166,17 +168,20 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
             audioProcessor.setCurrentProgram (selected);
             currentScreen = ParamScreen::Default;
             copySrcLine = -1;
+            syncKeyboardFocusForScreen();
             repaint();
         }
     };
     presetSelector.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff101319));
     presetSelector.setColour (juce::ComboBox::textColourId, juce::Colours::white);
     presetSelector.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff00e5ff));
+    presetSelector.setWantsKeyboardFocus (false);
     addAndMakeVisible (presetSelector);
 
     // Load .SYX & Reset ROM
     loadSyxButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff003b46));
     loadSyxButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff00e5ff));
+    loadSyxButton.setWantsKeyboardFocus (false);
     loadSyxButton.onClick = [this]()
     {
         fileChooser = std::make_unique<juce::FileChooser> (
@@ -192,6 +197,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
             {
                 refreshPresetList();
                 currentScreen = ParamScreen::Default;
+                syncKeyboardFocusForScreen();
                 repaint();
             }
         });
@@ -200,6 +206,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
 
     saveSyxButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff064e3b));
     saveSyxButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff6ee7b7));
+    saveSyxButton.setWantsKeyboardFocus (false);
     saveSyxButton.onClick = [this]()
     {
         auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
@@ -255,11 +262,13 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
 
     resetRomButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232832));
     resetRomButton.setColour (juce::TextButton::textColourOffId, juce::Colours::lightgrey);
+    resetRomButton.setWantsKeyboardFocus (false);
     resetRomButton.onClick = [this]()
     {
         audioProcessor.resetFactoryPresets();
         refreshPresetList();
         currentScreen = ParamScreen::Default;
+        syncKeyboardFocusForScreen();
         repaint();
     };
     addAndMakeVisible (resetRomButton);
@@ -271,6 +280,7 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
     volumeSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff00838f));
     volumeSlider.setColour (juce::Slider::textBoxTextColourId, juce::Colours::white);
     volumeSlider.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff101319));
+    volumeSlider.setWantsKeyboardFocus (false);
     addAndMakeVisible (volumeSlider);
     volumeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         p.getVTS(), "volume", volumeSlider);
@@ -299,7 +309,14 @@ CZ1AudioProcessorEditor::CZ1AudioProcessorEditor (CZ1AudioProcessor& p)
 
     homeLcdBtn.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff14242b));
     homeLcdBtn.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff00e5ff));
-    homeLcdBtn.onClick = [this]() { currentScreen = ParamScreen::Default; copySrcLine = -1; repaint(); };
+    homeLcdBtn.setWantsKeyboardFocus (false);
+    homeLcdBtn.onClick = [this]()
+    {
+        currentScreen = ParamScreen::Default;
+        copySrcLine = -1;
+        syncKeyboardFocusForScreen();
+        repaint();
+    };
     addAndMakeVisible (homeLcdBtn);
 
     // PARAMETER SECTION top & side buttons
@@ -339,10 +356,121 @@ CZ1AudioProcessorEditor::~CZ1AudioProcessorEditor()
 
 void CZ1AudioProcessorEditor::styleButton (juce::TextButton& btn, bool active)
 {
+    btn.setWantsKeyboardFocus (false);
     btn.setColour (juce::TextButton::buttonColourId, active ? juce::Colour (0xff27303f) : juce::Colour (0xff1a1f28));
     btn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2e3a4d));
     btn.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe2e8f0));
     btn.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+}
+
+void CZ1AudioProcessorEditor::syncKeyboardFocusForScreen()
+{
+    if (currentScreen == ParamScreen::Name)
+    {
+        keyboardComponent.setWantsKeyboardFocus (false);
+        if (isShowing())
+            grabKeyboardFocus();
+    }
+    else
+    {
+        keyboardComponent.setWantsKeyboardFocus (true);
+    }
+}
+
+void CZ1AudioProcessorEditor::mouseDown (const juce::MouseEvent&)
+{
+    if (currentScreen == ParamScreen::Name && isShowing())
+        grabKeyboardFocus();
+}
+
+bool CZ1AudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    if (currentScreen != ParamScreen::Name)
+        return false;
+
+    if (key == juce::KeyPress::leftKey)     { moveCursor (-1); return true; }
+    if (key == juce::KeyPress::rightKey)    { moveCursor (1); return true; }
+    if (key == juce::KeyPress::upKey)       { adjustValue (1); return true; }
+    if (key == juce::KeyPress::downKey)     { adjustValue (-1); return true; }
+    if (key == juce::KeyPress::homeKey)     { cursorField = 0; repaint(); return true; }
+    if (key == juce::KeyPress::endKey)      { cursorField = 15; repaint(); return true; }
+    if (key == juce::KeyPress::returnKey || key == juce::KeyPress::escapeKey)
+    {
+        currentScreen = ParamScreen::Default;
+        syncKeyboardFocusForScreen();
+        repaint();
+        return true;
+    }
+
+    auto readPaddedName = [] (const CZ1PresetDef& p, char outBuf[17])
+    {
+        std::memset (outBuf, ' ', 16);
+        const size_t len = std::min<size_t> (16, std::strlen (p.name));
+        for (size_t i = 0; i < len; ++i)
+            outBuf[i] = static_cast<char> (std::toupper (static_cast<unsigned char> (p.name[i])));
+        outBuf[16] = '\0';
+    };
+
+    auto commitNameBuffer = [this] (CZ1PresetDef& p, const char inBuf[17])
+    {
+        char trimmed[17] = {};
+        std::memcpy (trimmed, inBuf, 16);
+        int lastNonSpace = 15;
+        while (lastNonSpace >= 0 && trimmed[lastNonSpace] == ' ')
+            --lastNonSpace;
+        trimmed[lastNonSpace + 1] = '\0';
+        std::memset (p.name, 0, sizeof (p.name));
+        std::strncpy (p.name, trimmed, sizeof (p.name) - 1);
+        refreshPresetList();
+        repaint();
+    };
+
+    if (key == juce::KeyPress::backspaceKey)
+    {
+        const juce::ScopedLock sl (audioProcessor.getEngineLock());
+        auto& preset = audioProcessor.getEngine().getCurrentPresetMutable();
+        char buf[17] = {};
+        readPaddedName (preset, buf);
+        int idx = std::clamp (cursorField, 0, 15);
+        if (idx > 0 && buf[idx] == ' ')
+            --idx;
+        buf[idx] = ' ';
+        cursorField = idx;
+        commitNameBuffer (preset, buf);
+        return true;
+    }
+
+    if (key == juce::KeyPress::deleteKey)
+    {
+        const juce::ScopedLock sl (audioProcessor.getEngineLock());
+        auto& preset = audioProcessor.getEngine().getCurrentPresetMutable();
+        char buf[17] = {};
+        readPaddedName (preset, buf);
+        const int idx = std::clamp (cursorField, 0, 15);
+        buf[idx] = ' ';
+        commitNameBuffer (preset, buf);
+        return true;
+    }
+
+    const juce::juce_wchar ch = key.getTextCharacter();
+    if (ch >= 32 && ch <= 126)
+    {
+        const char upper = static_cast<char> (std::toupper (static_cast<int> (ch)));
+        if (std::strchr (kAllowedNameChars, upper) != nullptr)
+        {
+            const juce::ScopedLock sl (audioProcessor.getEngineLock());
+            auto& preset = audioProcessor.getEngine().getCurrentPresetMutable();
+            char buf[17] = {};
+            readPaddedName (preset, buf);
+            const int idx = std::clamp (cursorField, 0, 15);
+            buf[idx] = upper;
+            cursorField = std::min (15, idx + 1);
+            commitNameBuffer (preset, buf);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void CZ1AudioProcessorEditor::refreshPresetList()
@@ -406,7 +534,7 @@ void CZ1AudioProcessorEditor::timerCallback()
         holdTickCount = 0;
     }
 
-    repaint (24, 158, 330, 80); // Keep LCD responsive for voices/flash
+    repaint (32, 134, 316, 100); // Keep LCD responsive for voices/flash
 }
 
 // ==============================================================================
@@ -867,6 +995,7 @@ void CZ1AudioProcessorEditor::onLineParamClicked (int lineIdx, LineParamKind kin
         cursorField = 0;
         currentScreen = target;
     }
+    syncKeyboardFocusForScreen();
     repaint();
 }
 
@@ -904,6 +1033,7 @@ void CZ1AudioProcessorEditor::onGlobalParamClicked (ParamScreen target)
         cursorField = (target == ParamScreen::Detune) ? 1 : 0;
         currentScreen = target;
     }
+    syncKeyboardFocusForScreen();
     repaint();
 }
 
@@ -974,6 +1104,7 @@ void CZ1AudioProcessorEditor::onCopyClicked()
     copySrcLine = -1;
     currentScreen = (currentScreen == ParamScreen::CopyWaitSrc || currentScreen == ParamScreen::CopyWaitDst)
                   ? ParamScreen::Default : ParamScreen::CopyWaitSrc;
+    syncKeyboardFocusForScreen();
     repaint();
 }
 
@@ -981,6 +1112,7 @@ void CZ1AudioProcessorEditor::onInitClicked()
 {
     copySrcLine = -1;
     currentScreen = (currentScreen == ParamScreen::InitWait) ? ParamScreen::Default : ParamScreen::InitWait;
+    syncKeyboardFocusForScreen();
     repaint();
 }
 
@@ -1138,6 +1270,7 @@ void CZ1AudioProcessorEditor::filesDropped (const juce::StringArray& files, int,
             {
                 refreshPresetList();
                 currentScreen = ParamScreen::Default;
+                syncKeyboardFocusForScreen();
                 break;
             }
         }
@@ -1232,10 +1365,12 @@ void CZ1AudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("ENV POINT", 196, 412, 152, 16, juce::Justification::centred);
 
     // Status line at bottom of Data Entry
-    g.setColour (juce::Colour (0xff64748b));
+    g.setColour (currentScreen == ParamScreen::Name ? juce::Colour (0xff00e5ff) : juce::Colour (0xff64748b));
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("VOICES ACTIVE: " + juce::String (audioProcessor.getEngine().getActiveVoiceCount()) + " / 8 DUAL",
-                32, 464, 316, 18, juce::Justification::centred);
+    const juce::String statusText = (currentScreen == ParamScreen::Name)
+        ? "TYPE KEYBOARD TO RENAME  ·  ENTER = DONE"
+        : ("VOICES ACTIVE: " + juce::String (audioProcessor.getEngine().getActiveVoiceCount()) + " / 8 DUAL");
+    g.drawText (statusText, 32, 464, 316, 18, juce::Justification::centred);
 
     // ---- PARAMETER SECTION PANEL (Right: x=372..1000, y=94..492) ----
     const juce::Rectangle<int> paramPanel (372, 94, 628, 398);
