@@ -28,17 +28,17 @@ namespace
     }
 
     int sysexToDcaRate (uint8_t b)   { return (b == 0) ? 0 : (b >= 119 ? 99 : std::min (99, (b * 99) / 119 + 1)); }
-    uint8_t dcaRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 0 : (r >= 99 ? 119 : static_cast<uint8_t> (std::clamp (static_cast<int> (std::round ((r - 1) * 119.0 / 99.0)), 1, 118))); }
+    uint8_t dcaRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 0 : (r >= 99 ? 119 : static_cast<uint8_t> (std::clamp ((r * 119) / 99, 1, 118))); }
     int sysexToDcaLevel (uint8_t b)  { return (b == 0) ? 0 : std::clamp (static_cast<int> (b) - 28, 0, 99); }
     uint8_t dcaLevelToSysex (int l)  { l = std::clamp (l, 0, 99); return (l == 0) ? 0 : static_cast<uint8_t> (std::clamp (l + 28, 29, 127)); }
 
     int sysexToDcwRate (uint8_t b)   { return (b <= 8) ? 0 : (b >= 127 ? 99 : std::min (99, ((b - 8) * 99) / 119 + 1)); }
-    uint8_t dcwRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 8 : (r >= 99 ? 127 : static_cast<uint8_t> (std::clamp (static_cast<int> (std::round (8.0 + (r - 1) * 119.0 / 99.0)), 8, 126))); }
+    uint8_t dcwRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 8 : (r >= 99 ? 127 : static_cast<uint8_t> (std::clamp (8 + (r * 119) / 99, 9, 126))); }
     int sysexToDcwLevel (uint8_t b)  { return (b == 0) ? 0 : std::min (99, (b * 99) / 127 + 1); }
-    uint8_t dcwLevelToSysex (int l)  { l = std::clamp (l, 0, 99); return (l == 0) ? 0 : (l >= 99 ? 127 : static_cast<uint8_t> (std::clamp (static_cast<int> (std::round ((l - 1) * 127.0 / 99.0)), 1, 126))); }
+    uint8_t dcwLevelToSysex (int l)  { l = std::clamp (l, 0, 99); return (l == 0) ? 0 : (l >= 99 ? 127 : static_cast<uint8_t> (std::clamp ((l * 127) / 99, 1, 126))); }
 
     int sysexToDcoRate (uint8_t b)   { return (b == 0) ? 0 : (b >= 127 ? 99 : std::min (99, (b * 99) / 127 + 1)); }
-    uint8_t dcoRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 0 : (r >= 99 ? 127 : static_cast<uint8_t> (std::clamp (static_cast<int> (std::round ((r - 1) * 127.0 / 99.0)), 1, 126))); }
+    uint8_t dcoRateToSysex (int r)   { r = std::clamp (r, 0, 99); return (r == 0) ? 0 : (r >= 99 ? 127 : static_cast<uint8_t> (std::clamp ((r * 127) / 99, 1, 126))); }
     int sysexToDcoLevel (uint8_t b)  { return (b > 63) ? std::clamp (static_cast<int> (b) - 4, 0, 99) : std::clamp (static_cast<int> (b), 0, 99); }
     uint8_t dcoLevelToSysex (int l)  { l = std::clamp (l, 0, 99); return (l >= 64) ? static_cast<uint8_t> (std::min (103, l + 4)) : static_cast<uint8_t> (l); }
 
