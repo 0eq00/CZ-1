@@ -507,10 +507,40 @@ void CZ1Engine::setAfterTouch(float atNorm)
     effectSettings.afterTouch = std::clamp(atNorm, 0.0f, 1.0f);
 }
 
-float CZ1Engine::getLineLevelScale(uint8_t lineLevel)
+int CZ1Engine::getLineLevelAttenuation(uint8_t lineLevel)
 {
     const int lvl = (lineLevel == 0) ? 15 : std::clamp(static_cast<int>(lineLevel), 1, 15);
-    return static_cast<float>(lvl) / 15.0f;
+    // CZ-1 Line Level operates in the logarithmic DCA domain (~2 DCA units ≈ 1.23 dB per step)
+    return (15 - lvl) * 2;
+}
+
+float CZ1Engine::getVelocityAttenuationNorm(int velocity)
+{
+    // MAME-calibrated CZ-1 hardware velocity curve (saturates at vel >= 102, max attenuation at vel <= 29)
+    return static_cast<float>(127 - static_cast<int>(getDcwAttackTarget(velocity))) / 39.0f;
+}
+
+int CZ1Engine::getDcaVelocityDrop(int velocity, uint8_t dcaVelocity, uint8_t lineLevel)
+{
+    const int lineDrop = getLineLevelAttenuation(lineLevel);
+    const int velDrop = (dcaVelocity > 0)
+        ? static_cast<int>(std::round(getVelocityAttenuationNorm(velocity) * (5.0f + static_cast<float>(dcaVelocity) * 4.5f)))
+        : 0;
+    return lineDrop + velDrop;
+}
+
+int CZ1Engine::getDcwVelocityDrop(int velocity, uint8_t dcwVelocity)
+{
+    return (dcwVelocity > 0)
+        ? static_cast<int>(std::round(getVelocityAttenuationNorm(velocity) * (static_cast<float>(dcwVelocity) * 9.75f)))
+        : 0;
+}
+
+float CZ1Engine::getDcoVelocityScale(int velocity, uint8_t dcoVelocity)
+{
+    if (dcoVelocity == 0)
+        return 1.0f;
+    return std::max(0.0f, 1.0f - getVelocityAttenuationNorm(velocity) * (static_cast<float>(dcoVelocity) / 15.0f));
 }
 
 void CZ1Engine::syncDetuneAndVibratoFromPreset()
@@ -682,7 +712,7 @@ void CZ1Engine::applyPresetWaveforms(bool resetEnvelopes)
     }
 }
 
-void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased)
+void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, int dcaDrop, int keyFollow, int note, bool isReleased)
 {
     uint32_t target = 0;
     uint32_t rate = 0;
@@ -698,15 +728,15 @@ void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     else
     {
         const auto& step = envDef.steps[stage];
-        target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(step.level * velScale)), 0, 127));
+        target = (step.level > 0)
+            ? static_cast<uint32_t>(std::clamp(static_cast<int>(step.level) - dcaDrop, 0, 127))
+            : 0u;
         rate = step.rate;
         sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
     }
 
     // Authentic Casio CZ-1 Key Follow rate scaling:
     // In the uPD933 chip, every +8 in the rate register doubles the envelope speed.
-    // Setting keyFollow = 9 provides full keyboard tracking, calibrated to hardware MAME debug log.
-    // Base rate is calibrated around Middle C (MIDI Key 60), scaling from -1 at low keys up to +28 at key 108.
     if (keyFollow > 0)
     {
         const int baseOffset = getKeyRateOffset(note);
@@ -721,7 +751,7 @@ void CZ1Engine::writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     chip.writeReg(0x00 + vnum, regWord);
 }
 
-void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased)
+void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, int dcwDrop, int keyFollow, int note, bool isReleased)
 {
     uint32_t target = 0;
     uint32_t rate = 0;
@@ -737,7 +767,9 @@ void CZ1Engine::writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
     else
     {
         const auto& step = envDef.steps[stage];
-        target = static_cast<uint32_t>(std::clamp(static_cast<int>(std::round(step.level * velScale)), 0, 127));
+        target = (step.level > 0)
+            ? static_cast<uint32_t>(std::clamp(static_cast<int>(step.level) - dcwDrop, 0, 127))
+            : 0u;
         rate = step.rate;
         sus = (stage == envDef.sustain && !isReleased) ? 1 : 0;
     }
@@ -807,13 +839,13 @@ void CZ1Engine::writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envD
 
 int CZ1Engine::getKeyRateOffset(int midiNote)
 {
-    // Authentic Casio CZ-1 Key Follow rate offsets across 88 keys
-    // Calibrated directly against MAME hardware register logs:
-    // Key 21/48: 0, Key 60: 1, Key 72: 4, Key 84: 11, Key 96: 23, Key 108: 40
-    if (midiNote <= 48)
+    // Authentic Casio CZ-1 Key Follow rate offsets across 88 keys (by sounding line note).
+    // Calibrated against MAME hardware logs (A-1 octave=-1, kf=9) and VES D-4 (octave=0, kf=5):
+    // Sounding Note <=36: 0, 48: 1, 60: 4, 72: 11, 84: 23, 96: 40
+    if (midiNote <= 36)
         return 0;
 
-    const float x = (midiNote - 48) / 12.0f;
+    const float x = (midiNote - 36) / 12.0f;
     float off = x * x;
     if (x > 2.0f)
         off += std::pow(x - 2.0f, 2.0f) * 1.666f;
@@ -1128,16 +1160,13 @@ void CZ1Engine::triggerVoiceNoteOn(int midiNote, int velocity, bool wasLegato)
     chip.writeReg(0x98 + v1, 0x0080);
     chip.writeReg(0x98 + v2, 0x0000);
 
-    const float line1Scale = getLineLevelScale(lineDef1.lineLevel);
-    const float line2Scale = getLineLevelScale(lineDef2.lineLevel);
+    const int dcaDrop1 = getDcaVelocityDrop(vel, lineDef1.dcaVelocity, lineDef1.lineLevel);
+    const int dcwDrop1 = getDcwVelocityDrop(vel, lineDef1.dcwVelocity);
+    const float velScaleDco1 = getDcoVelocityScale(vel, lineDef1.dcoVelocity);
 
-    const float velScaleDca1 = (1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f)) * line1Scale;
-    const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
-    const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
-
-    const float velScaleDca2 = (1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f)) * line2Scale;
-    const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
-    const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+    const int dcaDrop2 = getDcaVelocityDrop(vel, lineDef2.dcaVelocity, lineDef2.lineLevel);
+    const int dcwDrop2 = getDcwVelocityDrop(vel, lineDef2.dcwVelocity);
+    const float velScaleDco2 = getDcoVelocityScale(vel, lineDef2.dcoVelocity);
 
     const int line1Note = std::clamp(midiNote + preset.octave * 12, 0, 127);
     const int line2Note = std::clamp(static_cast<int>(std::round(midiNote + preset.octave * 12 + preset.detuneSemitones)), 0, 127);
@@ -1146,8 +1175,8 @@ void CZ1Engine::triggerVoiceNoteOn(int midiNote, int velocity, bool wasLegato)
 
     if (hasLine1)
     {
-        writeDcaStep(chip, v1, lineDef1.dca, 0, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, false);
-        writeDcwStep(chip, v1, lineDef1.dcw, 0, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, false);
+        writeDcaStep(chip, v1, lineDef1.dca, 0, dcaDrop1, lineDef1.dcaKeyFollow, line1Note, false);
+        writeDcwStep(chip, v1, lineDef1.dcw, 0, dcwDrop1, lineDef1.dcwKeyFollow, line1Note, false);
         writeDcoStep(chip, v1, lineDef1.dco, 0, velScaleDco1, 0, line1Note, false);
     }
     else
@@ -1158,8 +1187,8 @@ void CZ1Engine::triggerVoiceNoteOn(int midiNote, int velocity, bool wasLegato)
 
     if (hasLine2)
     {
-        writeDcaStep(chip, v2, lineDef2.dca, 0, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, false);
-        writeDcwStep(chip, v2, lineDef2.dcw, 0, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, false);
+        writeDcaStep(chip, v2, lineDef2.dca, 0, dcaDrop2, lineDef2.dcaKeyFollow, line2Note, false);
+        writeDcwStep(chip, v2, lineDef2.dcw, 0, dcwDrop2, lineDef2.dcwKeyFollow, line2Note, false);
         writeDcoStep(chip, v2, lineDef2.dco, 0, velScaleDco2, 0, line2Note, false);
     }
     else
@@ -1188,16 +1217,13 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
     const int midiNote = v.midiNote;
 
     const int vel = v.velocity;
-    const float line1Scale = getLineLevelScale(lineDef1.lineLevel);
-    const float line2Scale = getLineLevelScale(lineDef2.lineLevel);
+    const int dcaDrop1 = getDcaVelocityDrop(vel, lineDef1.dcaVelocity, lineDef1.lineLevel);
+    const int dcwDrop1 = getDcwVelocityDrop(vel, lineDef1.dcwVelocity);
+    const float velScaleDco1 = getDcoVelocityScale(vel, lineDef1.dcoVelocity);
 
-    const float velScaleDca1 = (1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f)) * line1Scale;
-    const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
-    const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
-
-    const float velScaleDca2 = (1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f)) * line2Scale;
-    const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
-    const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+    const int dcaDrop2 = getDcaVelocityDrop(vel, lineDef2.dcaVelocity, lineDef2.lineLevel);
+    const int dcwDrop2 = getDcwVelocityDrop(vel, lineDef2.dcwVelocity);
+    const float velScaleDco2 = getDcoVelocityScale(vel, lineDef2.dcoVelocity);
 
     const int line1Note = v.line1Note;
     const int line2Note = v.line2Note;
@@ -1214,7 +1240,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line1.dcaStage = lineDef1.dca.end;
         }
         if (v.line1.dcaStage > lineDef1.dca.end) v.line1.dcaStage = lineDef1.dca.end;
-        writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, true);
+        writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, dcaDrop1, lineDef1.dcaKeyFollow, line1Note, true);
 
         if (lineDef1.dcw.sustain != -1)
         {
@@ -1226,7 +1252,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line1.dcwStage = lineDef1.dcw.end;
         }
         if (v.line1.dcwStage > lineDef1.dcw.end) v.line1.dcwStage = lineDef1.dcw.end;
-        writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, true);
+        writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, dcwDrop1, lineDef1.dcwKeyFollow, line1Note, true);
 
         if (lineDef1.dco.sustain != -1)
         {
@@ -1253,7 +1279,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line2.dcaStage = lineDef2.dca.end;
         }
         if (v.line2.dcaStage > lineDef2.dca.end) v.line2.dcaStage = lineDef2.dca.end;
-        writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, true);
+        writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, dcaDrop2, lineDef2.dcaKeyFollow, line2Note, true);
 
         if (lineDef2.dcw.sustain != -1)
         {
@@ -1265,7 +1291,7 @@ void CZ1Engine::triggerVoiceRelease(NoteVoice& v)
             v.line2.dcwStage = lineDef2.dcw.end;
         }
         if (v.line2.dcwStage > lineDef2.dcw.end) v.line2.dcwStage = lineDef2.dcw.end;
-        writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, true);
+        writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, dcwDrop2, lineDef2.dcwKeyFollow, line2Note, true);
 
         if (lineDef2.dco.sustain != -1)
         {
@@ -1400,16 +1426,13 @@ void CZ1Engine::processEnvelopeSequencer()
         const int line2Note = v.line2Note;
         const bool isReleased = v.isReleased;
 
-        const float line1Scale = getLineLevelScale(lineDef1.lineLevel);
-        const float line2Scale = getLineLevelScale(lineDef2.lineLevel);
+        const int dcaDrop1 = getDcaVelocityDrop(vel, lineDef1.dcaVelocity, lineDef1.lineLevel);
+        const int dcwDrop1 = getDcwVelocityDrop(vel, lineDef1.dcwVelocity);
+        const float velScaleDco1 = getDcoVelocityScale(vel, lineDef1.dcoVelocity);
 
-        const float velScaleDca1 = (1.0f - ((127 - vel) * lineDef1.dcaVelocity) / (127.0f * 15.0f)) * line1Scale;
-        const float velScaleDcw1 = 1.0f - ((127 - vel) * lineDef1.dcwVelocity) / (127.0f * 15.0f);
-        const float velScaleDco1 = 1.0f - ((127 - vel) * lineDef1.dcoVelocity) / (127.0f * 15.0f);
-
-        const float velScaleDca2 = (1.0f - ((127 - vel) * lineDef2.dcaVelocity) / (127.0f * 15.0f)) * line2Scale;
-        const float velScaleDcw2 = 1.0f - ((127 - vel) * lineDef2.dcwVelocity) / (127.0f * 15.0f);
-        const float velScaleDco2 = 1.0f - ((127 - vel) * lineDef2.dcoVelocity) / (127.0f * 15.0f);
+        const int dcaDrop2 = getDcaVelocityDrop(vel, lineDef2.dcaVelocity, lineDef2.lineLevel);
+        const int dcwDrop2 = getDcwVelocityDrop(vel, lineDef2.dcwVelocity);
+        const float velScaleDco2 = getDcoVelocityScale(vel, lineDef2.dcoVelocity);
 
         // Portamento / Glide pitch ramp (Manual p.16-17)
         const int baseOctShift = preset.octave * 12 * 512;
@@ -1508,7 +1531,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line1.dcaStage < lineDef1.dca.end)
                 {
                     v.line1.dcaStage++;
-                    writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, velScaleDca1, lineDef1.dcaKeyFollow, line1Note, isReleased);
+                    writeDcaStep(chip, v1, lineDef1.dca, v.line1.dcaStage, dcaDrop1, lineDef1.dcaKeyFollow, line1Note, isReleased);
                 }
                 else
                 {
@@ -1529,7 +1552,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line1.dcwStage < lineDef1.dcw.end)
                 {
                     v.line1.dcwStage++;
-                    writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, velScaleDcw1, lineDef1.dcwKeyFollow, line1Note, isReleased);
+                    writeDcwStep(chip, v1, lineDef1.dcw, v.line1.dcwStage, dcwDrop1, lineDef1.dcwKeyFollow, line1Note, isReleased);
                 }
             }
 
@@ -1559,7 +1582,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line2.dcaStage < lineDef2.dca.end)
                 {
                     v.line2.dcaStage++;
-                    writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, velScaleDca2, lineDef2.dcaKeyFollow, line2Note, isReleased);
+                    writeDcaStep(chip, v2, lineDef2.dca, v.line2.dcaStage, dcaDrop2, lineDef2.dcaKeyFollow, line2Note, isReleased);
                 }
                 else
                 {
@@ -1580,7 +1603,7 @@ void CZ1Engine::processEnvelopeSequencer()
                 else if (v.line2.dcwStage < lineDef2.dcw.end)
                 {
                     v.line2.dcwStage++;
-                    writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, velScaleDcw2, lineDef2.dcwKeyFollow, line2Note, isReleased);
+                    writeDcwStep(chip, v2, lineDef2.dcw, v.line2.dcwStage, dcwDrop2, lineDef2.dcwKeyFollow, line2Note, isReleased);
                 }
             }
 
@@ -1642,7 +1665,7 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
     const float f0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
     const float f1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
 
-    const float mono = (f0 + f1) * 0.65f;
+    const float mono = f0 + f1;
 
     // Previous Stereo Chorus implementation (kept commented out as requested)
     /*

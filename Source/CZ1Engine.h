@@ -227,13 +227,17 @@ private:
     static uint8_t getDcwDecay1Target(int velocity);
     static uint8_t getDcoAttackTarget(int velocity);
 
-    void writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
-    void writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
+    void writeDcaStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, int dcaDrop, int keyFollow, int note, bool isReleased);
+    void writeDcwStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, int dcwDrop, int keyFollow, int note, bool isReleased);
     void writeDcoStep(Upd933Chip& chip, int vnum, const EnvelopeDef& envDef, int stage, float velScale, int keyFollow, int note, bool isReleased);
     void triggerVoiceRelease(NoteVoice& v);
     void applyPresetWaveforms(bool resetEnvelopes = true);
     void syncDetuneAndVibratoFromPreset();
-    static float getLineLevelScale(uint8_t lineLevel);
+    static int   getLineLevelAttenuation(uint8_t lineLevel);
+    static float getVelocityAttenuationNorm(int velocity);
+    static int   getDcaVelocityDrop(int velocity, uint8_t dcaVelocity, uint8_t lineLevel);
+    static int   getDcwVelocityDrop(int velocity, uint8_t dcwVelocity);
+    static float getDcoVelocityScale(int velocity, uint8_t dcoVelocity);
 
     void triggerVoiceNoteOn(int midiNote, int velocity, bool wasLegato);
     static float getDurationSecondsForTime(int timeVal);
