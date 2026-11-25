@@ -2,7 +2,7 @@
 
 <JUCERPROJECT id="W26oN5" name="CZ-1" projectType="audioplug" useAppConfig="0"
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" companyName="0eq00"
-              companyWebsite="https://github.com/0eq00" pluginFormats="buildVST3"
+              companyWebsite="https://github.com/0eq00" pluginFormats="buildStandalone,buildVST3"
               pluginCharacteristicsValue="pluginIsSynth,pluginProducesMidiOut,pluginWantsMidiIn">
   <MAINGROUP id="qaLMcw" name="CZ-1">
     <GROUP id="{0DCC52D5-E0B5-7013-1E2D-0A90765C2CA6}" name="Source">
@@ -37,7 +37,8 @@
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"
+               JUCE_ASIO="1"/>
   <EXPORTFORMATS>
     <VS2026 targetFolder="Builds/VisualStudio2026">
       <CONFIGURATIONS>
