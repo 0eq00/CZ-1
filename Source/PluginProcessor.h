@@ -69,6 +69,8 @@ private:
     std::atomic<float>* volumeParam = nullptr;
     std::atomic<float>* chorusParam = nullptr;
     std::atomic<float>* chorusDepthParam = nullptr;
+    std::atomic<float>* dcw1DepthOffsetParam = nullptr;
+    std::atomic<float>* dcw2DepthOffsetParam = nullptr;
     std::atomic<uint64_t> stateRevision { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CZ1AudioProcessor)

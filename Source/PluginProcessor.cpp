@@ -204,6 +204,18 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
         0.4f));
 
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{"dcw1DepthOffset", 1},
+        "DCW1 Depth Offset",
+        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f),
+        0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{"dcw2DepthOffset", 1},
+        "DCW2 Depth Offset",
+        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f),
+        0.0f));
+
     return { params.begin(), params.end() };
 }
 
@@ -222,9 +234,11 @@ CZ1AudioProcessor::CZ1AudioProcessor()
      : parameters (*this, nullptr, juce::Identifier ("CZ1Params"), createParameterLayout())
 #endif
 {
-    volumeParam      = parameters.getRawParameterValue ("volume");
-    chorusParam      = parameters.getRawParameterValue ("chorus");
-    chorusDepthParam = parameters.getRawParameterValue ("chorusDepth");
+    volumeParam          = parameters.getRawParameterValue ("volume");
+    chorusParam          = parameters.getRawParameterValue ("chorus");
+    chorusDepthParam     = parameters.getRawParameterValue ("chorusDepth");
+    dcw1DepthOffsetParam = parameters.getRawParameterValue ("dcw1DepthOffset");
+    dcw2DepthOffsetParam = parameters.getRawParameterValue ("dcw2DepthOffset");
 }
 
 CZ1AudioProcessor::~CZ1AudioProcessor()
@@ -362,6 +376,10 @@ void CZ1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         engine.setChorusEnabled (*chorusParam > 0.5f);
     if (chorusDepthParam != nullptr)
         engine.setChorusDepth (*chorusDepthParam);
+    if (dcw1DepthOffsetParam != nullptr)
+        engine.setDcw1DepthOffset (dcw1DepthOffsetParam->load());
+    if (dcw2DepthOffsetParam != nullptr)
+        engine.setDcw2DepthOffset (dcw2DepthOffsetParam->load());
 
     const float masterVol = (volumeParam != nullptr) ? volumeParam->load() : 0.85f;
 
@@ -492,9 +510,13 @@ void CZ1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     const float curVol = (volumeParam != nullptr) ? volumeParam->load() : 0.85f;
     const bool curChorus = (chorusParam != nullptr) ? (*chorusParam > 0.5f) : engine.isChorusEnabled();
     const float curChorusDepth = (chorusDepthParam != nullptr) ? chorusDepthParam->load() : engine.getChorusDepth();
+    const float curDcw1Offset = (dcw1DepthOffsetParam != nullptr) ? dcw1DepthOffsetParam->load() : engine.getDcw1DepthOffset();
+    const float curDcw2Offset = (dcw2DepthOffsetParam != nullptr) ? dcw2DepthOffsetParam->load() : engine.getDcw2DepthOffset();
     root->setAttribute ("masterVolume", static_cast<double> (curVol));
     root->setAttribute ("chorusEnabled", curChorus);
     root->setAttribute ("chorusDepth", static_cast<double> (curChorusDepth));
+    root->setAttribute ("dcw1DepthOffset", static_cast<double> (curDcw1Offset));
+    root->setAttribute ("dcw2DepthOffset", static_cast<double> (curDcw2Offset));
 
     // 2. EFFECT SECTION & OVERALL ON/OFF switches
     const auto& eff = engine.getEffectSettings();
@@ -555,6 +577,8 @@ void CZ1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
     bool restoredVolumeFromApvts = false;
     bool restoredChorusFromApvts = false;
     bool restoredChorusDepthFromApvts = false;
+    bool restoredDcw1OffsetFromApvts = false;
+    bool restoredDcw2OffsetFromApvts = false;
 
     if (apvtsXml != nullptr)
     {
@@ -567,6 +591,8 @@ void CZ1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
                 if (id == "volume") restoredVolumeFromApvts = true;
                 if (id == "chorus") restoredChorusFromApvts = true;
                 if (id == "chorusDepth") restoredChorusDepthFromApvts = true;
+                if (id == "dcw1DepthOffset") restoredDcw1OffsetFromApvts = true;
+                if (id == "dcw2DepthOffset") restoredDcw2OffsetFromApvts = true;
             }
         }
         parameters.replaceState (juce::ValueTree::fromXml (*apvtsXml));
@@ -601,10 +627,32 @@ void CZ1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
         }
     }
 
+    if (!restoredDcw1OffsetFromApvts)
+    {
+        if (auto* p = parameters.getParameter ("dcw1DepthOffset"))
+        {
+            const float o1 = xmlState->hasAttribute ("dcw1DepthOffset")
+                ? std::clamp (static_cast<float> (xmlState->getDoubleAttribute ("dcw1DepthOffset", 0.0)), -1.0f, 1.0f)
+                : 0.0f;
+            p->setValueNotifyingHost (p->convertTo0to1 (o1));
+        }
+    }
+
+    if (!restoredDcw2OffsetFromApvts)
+    {
+        if (auto* p = parameters.getParameter ("dcw2DepthOffset"))
+        {
+            const float o2 = xmlState->hasAttribute ("dcw2DepthOffset")
+                ? std::clamp (static_cast<float> (xmlState->getDoubleAttribute ("dcw2DepthOffset", 0.0)), -1.0f, 1.0f)
+                : 0.0f;
+            p->setValueNotifyingHost (p->convertTo0to1 (o2));
+        }
+    }
+
     {
         const juce::ScopedLock sl (engineLock);
 
-        // Immediately sync Stereo Chorus & Depth into DSP engine
+        // Immediately sync Stereo Chorus, Depth & DCW Depth Offsets into DSP engine
         if (chorusParam != nullptr)
             engine.setChorusEnabled (*chorusParam > 0.5f);
         else if (xmlState->hasAttribute ("chorusEnabled"))
@@ -614,6 +662,16 @@ void CZ1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
             engine.setChorusDepth (*chorusDepthParam);
         else if (xmlState->hasAttribute ("chorusDepth"))
             engine.setChorusDepth (static_cast<float> (xmlState->getDoubleAttribute ("chorusDepth", 0.4)));
+
+        if (dcw1DepthOffsetParam != nullptr)
+            engine.setDcw1DepthOffset (dcw1DepthOffsetParam->load());
+        else if (xmlState->hasAttribute ("dcw1DepthOffset"))
+            engine.setDcw1DepthOffset (static_cast<float> (xmlState->getDoubleAttribute ("dcw1DepthOffset", 0.0)));
+
+        if (dcw2DepthOffsetParam != nullptr)
+            engine.setDcw2DepthOffset (dcw2DepthOffsetParam->load());
+        else if (xmlState->hasAttribute ("dcw2DepthOffset"))
+            engine.setDcw2DepthOffset (static_cast<float> (xmlState->getDoubleAttribute ("dcw2DepthOffset", 0.0)));
 
         // 2. Restore EFFECT SECTION & OVERALL ON/OFF switches
         const juce::XmlElement* effEl = isNewRoot ? xmlState->getChildByName ("EffectSettings") : xmlState.get();

@@ -116,8 +116,8 @@ public:
 
         void reset();
         void writeReg(uint8_t reg, uint16_t val);
-        int16_t renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
-        float renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine);
+        int16_t renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine, float dcwOffset = 0.0f);
+        float renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine, float dcw1Offset = 0.0f, float dcw2Offset = 0.0f);
         void updatePitchStep(int vnum, const uint32_t* pitchTable, const uint16_t* pitchFine);
     };
 
@@ -210,6 +210,11 @@ public:
     bool isChorusEnabled() const { return chorusEnabled; }
     void setChorusDepth(float depth) { chorusDepth = std::clamp(depth, 0.0f, 1.0f); }
     float getChorusDepth() const { return chorusDepth; }
+
+    void setDcw1DepthOffset(float offset) { dcw1DepthOffset = std::clamp(offset, -1.0f, 1.0f); }
+    float getDcw1DepthOffset() const { return dcw1DepthOffset; }
+    void setDcw2DepthOffset(float offset) { dcw2DepthOffset = std::clamp(offset, -1.0f, 1.0f); }
+    float getDcw2DepthOffset() const { return dcw2DepthOffset; }
 
     int getActiveVoiceCount() const;
 
@@ -307,4 +312,8 @@ private:
     float lastPortamentoPitchUnits = static_cast<float>(0x6a00);
     bool  hasLastPortamentoPitch = false;
     float smoothedAtGain = 1.0f;
+    float dcw1DepthOffset = 0.0f;
+    float dcw2DepthOffset = 0.0f;
+    float smoothedDcw1DepthOffset = 0.0f;
+    float smoothedDcw2DepthOffset = 0.0f;
 };

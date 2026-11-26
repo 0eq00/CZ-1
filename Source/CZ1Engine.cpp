@@ -158,7 +158,7 @@ void CZ1Engine::Upd933Chip::updatePitchStep(int vnum, const uint32_t* pitchTable
     voice.dcwLimit = static_cast<uint16_t>(0x400 - std::min(0x400U, (step >> (PITCH_SHIFT - 2))));
 }
 
-int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
+int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine, float dcwOffset)
 {
     Voice& voice = voices[vnum];
     int16_t sample = 0;
@@ -166,7 +166,17 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
     const uint16_t pos = (voice.position >> PITCH_SHIFT) & 0x7ff;
     const uint8_t wave = (voice.position >> (PITCH_SHIFT + 11)) & 1;
 
-    const uint16_t ldcw = std::min(static_cast<uint16_t>(dcw[vnum].current >> ENV_DCW_SHIFT), voice.dcwLimit);
+    constexpr float kMaxDcwDepth = 1016.0f; // 0x7f << 3 (max uPD933 DCW envelope output)
+    const uint32_t rawDcw = dcw[vnum].current >> ENV_DCW_SHIFT;
+    uint16_t modulatedDcw = static_cast<uint16_t>(rawDcw);
+    if (dcwOffset != 0.0f)
+    {
+        const float envDepthNorm = static_cast<float>(rawDcw) / kMaxDcwDepth;
+        const float clampedDepth = std::clamp(envDepthNorm + dcwOffset, 0.0f, 1.0f);
+        modulatedDcw = static_cast<uint16_t>(std::round(clampedDepth * kMaxDcwDepth));
+    }
+
+    const uint16_t ldcw = std::min(modulatedDcw, voice.dcwLimit);
     const uint16_t pivot = (0x400 > ldcw) ? (0x400 - ldcw) : 1;
     uint16_t phase = 0;
     uint16_t window = 0;
@@ -293,13 +303,15 @@ int16_t CZ1Engine::Upd933Chip::renderVoiceSample(int vnum, const uint16_t* cosin
     return sample;
 }
 
-float CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine)
+float CZ1Engine::Upd933Chip::renderChipSample(const uint16_t* cosine, const uint16_t* volumeTable, const uint32_t* pitchTable, const uint16_t* pitchFine, float dcw1Offset, float dcw2Offset)
 {
     int32_t total = 0;
     static const int voiceMap[] = {5, 0, 7, 2, 1, 4, 3, 6};
     for (int v : voiceMap)
     {
-        total += renderVoiceSample(v, cosine, volumeTable, pitchTable, pitchFine);
+        // Odd voices (7, 1, 3, 5) are Line 1; even voices (2, 4, 6, 0) are Line 2
+        const float dcwOffset = (v & 1) ? dcw1Offset : dcw2Offset;
+        total += renderVoiceSample(v, cosine, volumeTable, pitchTable, pitchFine, dcwOffset);
     }
     sampleCount++;
     return static_cast<float>(total) / 32768.0f;
@@ -391,6 +403,8 @@ void CZ1Engine::reset()
     hasLastPortamentoPitch = false;
     lastPortamentoPitchUnits = static_cast<float>(0x6a00);
     smoothedAtGain = 1.0f;
+    smoothedDcw1DepthOffset = dcw1DepthOffset;
+    smoothedDcw2DepthOffset = dcw2DepthOffset;
     sustainPedal = false;
 
     for (auto& buf : bbdBuffers)
@@ -1662,8 +1676,23 @@ void CZ1Engine::renderNativeSample(float& outLeft, float& outRight)
 {
     processEnvelopeSequencer();
 
-    const float f0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
-    const float f1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine);
+    // Smooth DCW depth offsets (~5ms time constant at 40 kHz) to prevent zipper noise during DAW/MIDI sweeps
+    constexpr float kDcwSmoothAlpha = 0.005f;
+    if (std::abs(dcw1DepthOffset - smoothedDcw1DepthOffset) < 1e-6f)
+        smoothedDcw1DepthOffset = dcw1DepthOffset;
+    else
+        smoothedDcw1DepthOffset += (dcw1DepthOffset - smoothedDcw1DepthOffset) * kDcwSmoothAlpha;
+
+    if (std::abs(dcw2DepthOffset - smoothedDcw2DepthOffset) < 1e-6f)
+        smoothedDcw2DepthOffset = dcw2DepthOffset;
+    else
+        smoothedDcw2DepthOffset += (dcw2DepthOffset - smoothedDcw2DepthOffset) * kDcwSmoothAlpha;
+
+    const float effDcw1Offset = smoothedDcw1DepthOffset;
+    const float effDcw2Offset = (getCurrentPresetDef().lineMode == 2) ? smoothedDcw1DepthOffset : smoothedDcw2DepthOffset;
+
+    const float f0 = chip0.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine, effDcw1Offset, effDcw2Offset);
+    const float f1 = chip1.renderChipSample(cosineTable, volumeTable, pitchTable, pitchFine, effDcw1Offset, effDcw2Offset);
 
     const float mono = f0 + f1;
 
